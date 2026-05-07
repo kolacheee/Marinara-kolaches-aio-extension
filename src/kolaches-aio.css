@@ -147,6 +147,50 @@
   color: var(--muted-foreground);
   opacity: 0.8;
 }
+.kaio-col-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+}
+.kaio-col-header-row > .kaio-col-header-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kaio-col-header-actions {
+  display: flex;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+}
+.kaio-col-header-btn {
+  padding: 0.3125rem 0.625rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border, #27272a);
+  background: var(--secondary, #1c1c25);
+  color: var(--foreground);
+  font-size: 0.6875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  white-space: nowrap;
+}
+.kaio-col-header-btn:hover {
+  background: var(--accent, #25252e);
+  border-color: var(--primary, #a78bfa);
+  color: var(--primary, #a78bfa);
+}
+.kaio-col-header-btn[data-state="errors"] {
+  border-color: #fb923c;
+  color: #fdba74;
+  background: rgba(251, 146, 60, 0.08);
+}
+.kaio-col-header-btn[data-state="ok"] {
+  border-color: #34d399;
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.08);
+}
 .kaio-col-body {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -345,6 +389,29 @@
 .kaio-block-content[data-empty="true"] {
   font-style: italic;
   opacity: 0.6;
+}
+
+/* Compact blocks: marker / chat-history / empty entries that fold their hint
+   text into the head row so the block doesn't waste two extra lines of height. */
+.kaio-block[data-compact="true"] .kaio-block-head,
+.kaio-subblock[data-compact="true"] .kaio-block-head {
+  margin-bottom: 0;
+}
+.kaio-block-head-hint {
+  font-size: 0.625rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+  opacity: 0.85;
+  margin-left: 0.125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.kaio-block[data-compact="true"][data-readonly="true"] {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
 }
 
 /* depth-injected sub-blocks (inside chat history) */
@@ -746,8 +813,43 @@
   color: var(--primary, #a78bfa);
   border-color: var(--primary, #a78bfa);
 }
-/* Avoid the toggle overlapping the last line of preview text */
-.kaio-block .kaio-block-content,
-.kaio-subblock .kaio-block-content {
+/* Reserve space for the expand/compress toggle only when there is one. */
+.kaio-block-content[data-has-toggle="true"] {
   padding-bottom: 1.25rem;
+}
+
+/* ─── Validation errors (XML / macro problems) ─── */
+.kaio-block[data-validate-error="true"],
+.kaio-subblock[data-validate-error="true"] {
+  border-color: #fb923c;
+  box-shadow: 0 0 0 1px #fb923c;
+  background: rgba(251, 146, 60, 0.06);
+}
+.kaio-block[data-validate-error="true"]:hover,
+.kaio-subblock[data-validate-error="true"]:hover {
+  border-color: #fdba74;
+  background: rgba(251, 146, 60, 0.10);
+}
+.kaio-block[data-validate-error="true"][data-selected="true"],
+.kaio-subblock[data-validate-error="true"][data-selected="true"] {
+  box-shadow: 0 0 0 2px #fb923c;
+}
+.kaio-block-validate {
+  margin-top: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  background: rgba(251, 146, 60, 0.10);
+  border: 1px solid rgba(251, 146, 60, 0.4);
+  font-size: 0.625rem;
+  color: #fdba74;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+}
+.kaio-block-validate-line code {
+  background: rgba(0,0,0,0.25);
+  padding: 0 0.25rem;
+  border-radius: 0.1875rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: #fed7aa;
 }

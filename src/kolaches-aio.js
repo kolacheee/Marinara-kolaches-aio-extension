@@ -79,6 +79,12 @@ const state = {
   variablePreviews: {},
   expandedBlocks: new Set(),     // block IDs whose preview is shown in full
   variablesPanelCollapsed: false,
+
+  // Validation: { blockId → [{ kind, message, snippet }, ...] }
+  // Cleared on Reload, source-switch, and Save. Repopulated by clicking
+  // the Validate button in the middle column header.
+  validationErrors: {},
+  validationRanLast: false,      // true once Validate has run at least once
 };
 
 // ── DOM refs (populated by buildConsole) ──────────────────────
@@ -130,8 +136,18 @@ function buildConsole() {
         </section>
         <section class="kaio-col kaio-col-middle">
           <header class="kaio-col-header">
-            <h3>Simulated Prompt</h3>
-            <p>Click any block to inspect &amp; edit on the right.</p>
+            <div class="kaio-col-header-row">
+              <div class="kaio-col-header-text">
+                <h3>Simulated Prompt</h3>
+                <p>Click any block to inspect &amp; edit on the right.</p>
+              </div>
+              <div class="kaio-col-header-actions">
+                <button class="kaio-col-header-btn" data-action="validate"
+                        title="Scan all sources for unbalanced XML tags and broken macros">
+                  ✓ Validate
+                </button>
+              </div>
+            </div>
           </header>
           <div class="kaio-col-body" data-region="middle"></div>
         </section>
@@ -164,9 +180,16 @@ function buildConsole() {
     }
     if (state.selectedCharacterId) await loadCharacter(state.selectedCharacterId);
     if (state.selectedPersonaId) await loadPersona(state.selectedPersonaId);
+    state.validationErrors = {};
+    state.validationRanLast = false;
+    resetValidateBtn();
     renderAll();
     showToast("Reloaded", "success");
   });
+  overlayEl.querySelector('[data-action="validate"]').addEventListener(
+    "click",
+    runValidation,
+  );
 
   // Esc closes (with dirty-state guard)
   document.addEventListener("keydown", onKeydown);
@@ -533,8 +556,11 @@ function buildSimulatedPrompt() {
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const afterEntries  = picked.filter((e) => e.position === 1)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  // Depth is INVERTED relative to Order: higher depth shows higher up in the
+  // chat history (= further from the most recent message), so we sort
+  // descending here and again where the substack is rendered.
   const depthEntries  = picked.filter((e) => e.position === 2)
-    .sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || (a.order ?? 0) - (b.order ?? 0));
+    .sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0) || (a.order ?? 0) - (b.order ?? 0));
 
   const character = state.characterFull || null;
   const persona   = state.personaFull   || null;
@@ -543,7 +569,7 @@ function buildSimulatedPrompt() {
   // inject inside the chat-history marker, not in the linear flow.
   const depthSections = (state.presetFull.sections || []).filter(
     (s) => s.enabled !== false && s.injectionPosition === "depth"
-  ).sort((a, b) => (a.injectionDepth ?? 0) - (b.injectionDepth ?? 0));
+  ).sort((a, b) => (b.injectionDepth ?? 0) - (a.injectionDepth ?? 0));
 
   for (const id of orderedIds) {
     const section = sectionsById[id];
@@ -633,6 +659,318 @@ function makeMarkerBlock(section, markerType) {
   };
 }
 
+// ── Validation ────────────────────────────────────────────────
+//
+// `Validate` walks every selected source — preset sections, ALL entries in
+// every selected lorebook (whether the user has them checked or not),
+// character fields, persona fields — concatenated in the order Marinara would
+// assemble them. We run a stack-based XML scan and a macro-shape check across
+// the combined stream so an opener in one entry can find its closer in
+// another. Any block that ends up "owning" an error gets:
+//   • added to state.validationErrors[blockId]
+//   • auto-checked into the Simulated Prompt if it's a lorebook entry the
+//     user hadn't selected (so the highlight is actually visible).
+//
+// Returns the error list so the caller can build a toast summary.
+function buildValidationItems() {
+  const items = [];
+  if (!state.presetFull) return items;
+
+  const sectionOrder = tryParseJSON(state.presetFull.preset.sectionOrder, []);
+  const sectionsById = Object.fromEntries(
+    (state.presetFull.sections || []).map((s) => [s.id, s])
+  );
+  const orderedIds = sectionOrder.length
+    ? sectionOrder
+    : (state.presetFull.sections || []).map((s) => s.id);
+
+  // Collect ALL entries from ALL selected lorebooks (regardless of the per-
+  // entry checkbox state) so we can spot orphans living in entries the user
+  // hasn't yet pulled into the simulation.
+  const allEntries = [];
+  for (const lbId of state.selectedLorebookIds) {
+    const entries = state.lorebookEntries[lbId] || [];
+    for (const e of entries) {
+      if (e.enabled === false) continue;
+      allEntries.push({ ...e, lorebookId: lbId });
+    }
+  }
+  const beforeEntries = allEntries.filter((e) => e.position === 0)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const afterEntries  = allEntries.filter((e) => e.position === 1)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const depthEntries  = allEntries.filter((e) => e.position === 2)
+    .sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0) || (a.order ?? 0) - (b.order ?? 0));
+
+  const character = state.characterFull || null;
+  const persona   = state.personaFull   || null;
+
+  const depthSections = (state.presetFull.sections || []).filter(
+    (s) => s.enabled !== false && s.injectionPosition === "depth"
+  ).sort((a, b) => (b.injectionDepth ?? 0) - (a.injectionDepth ?? 0));
+
+  const pushSection = (s) => {
+    items.push({
+      blockId: "section-" + s.id,
+      label: s.name || s.identifier || "Section",
+      content: s.content || "",
+    });
+  };
+  const pushEntry = (e) => {
+    items.push({
+      blockId: "entry-" + e.id,
+      label: e.name || "(unnamed entry)",
+      content: e.content || "",
+      lorebookId: e.lorebookId,
+      entryId: e.id,
+    });
+  };
+  const pushCharacter = (sectionId) => {
+    if (!character) return;
+    const d = character.data || {};
+    const fields = [
+      "description", "personality", "scenario",
+      "system_prompt", "post_history_instructions",
+    ];
+    const text = fields.map((f) => d[f] || "").filter(Boolean).join("\n\n");
+    items.push({
+      blockId: "character-" + character.id + "-" + sectionId,
+      label: d.name || character.name || "Character",
+      content: text,
+    });
+  };
+  const pushPersona = (sectionId) => {
+    if (!persona) return;
+    const text = [persona.description, persona.personality, persona.scenario]
+      .filter(Boolean).join("\n\n");
+    items.push({
+      blockId: "persona-" + persona.id + "-" + sectionId,
+      label: persona.name || "Persona",
+      content: text,
+    });
+  };
+
+  for (const id of orderedIds) {
+    const section = sectionsById[id];
+    if (!section || section.enabled === false) continue;
+    if (section.injectionPosition === "depth") continue;
+
+    if (section.isMarker && section.markerConfig) {
+      const cfg = tryParseJSON(section.markerConfig, {});
+      switch (cfg.type) {
+        case "world_info_before":
+          for (const e of beforeEntries) pushEntry(e);
+          break;
+        case "world_info_after":
+          for (const e of afterEntries) pushEntry(e);
+          break;
+        case "lorebook":
+          for (const e of [...beforeEntries, ...afterEntries]) pushEntry(e);
+          break;
+        case "character":
+          pushCharacter(section.id);
+          break;
+        case "persona":
+          pushPersona(section.id);
+          break;
+        case "chat_history": {
+          const allDepth = [
+            ...depthSections.map((s) => ({ kind: "section", section: s, depth: s.injectionDepth })),
+            ...depthEntries.map((e)  => ({ kind: "entry",   entry: e,    depth: e.depth ?? 0 })),
+          ].sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
+          for (const item of allDepth) {
+            if (item.kind === "section") pushSection(item.section);
+            else                         pushEntry(item.entry);
+          }
+          break;
+        }
+        // Other marker kinds (e.g. dialogue_examples, jailbreak) have no
+        // user-supplied content to scan, so we skip them.
+      }
+    } else {
+      pushSection(section);
+    }
+  }
+  return items;
+}
+
+// Macro shape check: a valid macro is exactly `{{name}}` — two `{`s, a name
+// of word-chars (and a few connectors like `:` for `{{getvar::x}}`), two `}`s.
+// We scan for any `\{+ ... \}+` substring whose brace counts aren't both 2 and
+// flag those as malformed. Nested-brace typos like `{u{ser}}` are caught by
+// this same scan: the inner `{ser}}` matches with 1 open / 2 close, which is
+// flagged. Single `{ x }` shapes inside code only get flagged when the inner
+// looks like a plain identifier — so `{ return y; }` (with punctuation) is
+// safely ignored.
+function scanMacroErrors(text) {
+  const out = [];
+  if (!text) return out;
+  const re = /(\{+)([^{}]*)(\}+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const open  = m[1].length;
+    const close = m[3].length;
+    if (open === 2 && close === 2) continue; // valid {{name}}
+    const inner = m[2].trim();
+    if (!inner) continue; // bare `{}` or `{{}}` — not macro-shaped
+    if (!/^[A-Za-z0-9_:.\-\s]+$/.test(inner)) continue; // unlikely to be a macro
+    out.push({
+      kind: "macro",
+      message: `Malformed macro (${open} '{', ${close} '}') — expected {{name}}`,
+      snippet: m[0],
+    });
+  }
+  return out;
+}
+
+// Stack-walk every <tag> across the concatenated source stream. Comments
+// (<!-- ... -->), processing instructions (<?...?>), and self-closing tags
+// (<br/>) are ignored. Mismatched closers and unclosed openers each carry
+// the blockId of the source they came from so renderBlock can highlight it.
+function scanXmlErrors(items) {
+  const errors = [];
+  const stack = [];
+  const tagRe = /<(\/?)([A-Za-z][\w:.-]*)\s*([^<>]*?)(\/?)>/g;
+  // Skip comments, processing instructions, and backtick-wrapped spans —
+  // backtick spans are nearly always referential mentions of a tag (e.g.
+  // "refer to `<context>`") rather than real openers/closers, so flagging
+  // them produces false positives. Triple-backtick fences first so they
+  // win over single-backtick matching inside the same code block.
+  const stripRe =
+    /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|```[\s\S]*?```|`[^`\n]*`/g;
+
+  for (const it of items) {
+    // Replace stripped content with spaces (not "") so snippet positions and
+    // any future column reporting stay aligned with the source.
+    const text = (it.content || "").replace(stripRe, (m) => " ".repeat(m.length));
+    tagRe.lastIndex = 0;
+    let m;
+    while ((m = tagRe.exec(text)) !== null) {
+      const isClose = m[1] === "/";
+      const isSelf  = !isClose && m[4] === "/";
+      if (isSelf) continue;
+      const name = m[2];
+      const snippet = m[0];
+      if (!isClose) {
+        stack.push({ name, snippet, blockId: it.blockId, label: it.label });
+      } else {
+        const top = stack[stack.length - 1];
+        if (top && top.name === name) {
+          stack.pop();
+          continue;
+        }
+        // Search for the nearest matching opener; everything above it is
+        // unclosed and gets reported in its source block.
+        let foundIdx = -1;
+        for (let i = stack.length - 1; i >= 0; i--) {
+          if (stack[i].name === name) { foundIdx = i; break; }
+        }
+        if (foundIdx >= 0) {
+          for (let i = stack.length - 1; i > foundIdx; i--) {
+            const orphan = stack[i];
+            errors.push({
+              blockId: orphan.blockId,
+              label: orphan.label,
+              kind: "xml-unclosed",
+              message: `<${orphan.name}> is never closed`,
+              snippet: orphan.snippet,
+            });
+          }
+          stack.length = foundIdx;
+        } else {
+          errors.push({
+            blockId: it.blockId,
+            label: it.label,
+            kind: "xml-unmatched-close",
+            message: `</${name}> has no opener`,
+            snippet,
+          });
+        }
+      }
+    }
+  }
+  for (const orphan of stack) {
+    errors.push({
+      blockId: orphan.blockId,
+      label: orphan.label,
+      kind: "xml-unclosed",
+      message: `<${orphan.name}> is never closed`,
+      snippet: orphan.snippet,
+    });
+  }
+  return errors;
+}
+
+function resetValidateBtn() {
+  const btn = overlayEl && overlayEl.querySelector('[data-action="validate"]');
+  if (!btn) return;
+  delete btn.dataset.state;
+  btn.textContent = "✓ Validate";
+}
+
+function runValidation() {
+  if (!state.presetFull) {
+    showToast("Select a preset first", "error");
+    return;
+  }
+  const items = buildValidationItems();
+  const errors = [
+    ...scanXmlErrors(items),
+    ...items.flatMap((it) =>
+      scanMacroErrors(it.content).map((e) => ({
+        blockId: it.blockId,
+        label: it.label,
+        kind: e.kind,
+        message: e.message,
+        snippet: e.snippet,
+      }))
+    ),
+  ];
+
+  // Auto-check any unselected lorebook entries whose blocks now carry errors,
+  // so the highlight is actually visible in the simulated prompt.
+  const itemByBlockId = new Map(items.map((it) => [it.blockId, it]));
+  let autoChecked = 0;
+  for (const err of errors) {
+    const it = itemByBlockId.get(err.blockId);
+    if (!it || !it.lorebookId || !it.entryId) continue;
+    if (!state.selectedEntryIdsByLorebook[it.lorebookId]) {
+      state.selectedEntryIdsByLorebook[it.lorebookId] = new Set();
+    }
+    const checked = state.selectedEntryIdsByLorebook[it.lorebookId];
+    if (!checked.has(it.entryId)) {
+      checked.add(it.entryId);
+      autoChecked++;
+    }
+  }
+
+  // Group errors by blockId for the per-block UI.
+  state.validationErrors = {};
+  for (const err of errors) {
+    if (!state.validationErrors[err.blockId]) state.validationErrors[err.blockId] = [];
+    state.validationErrors[err.blockId].push(err);
+  }
+  state.validationRanLast = true;
+  renderAll();
+
+  const btn = overlayEl && overlayEl.querySelector('[data-action="validate"]');
+  if (btn) {
+    btn.dataset.state = errors.length ? "errors" : "ok";
+    btn.textContent = errors.length
+      ? `⚠ ${errors.length} issue${errors.length === 1 ? "" : "s"}`
+      : "✓ All clean";
+  }
+
+  if (!errors.length) {
+    showToast("No XML or macro problems found", "success");
+  } else {
+    const extra = autoChecked
+      ? ` — added ${autoChecked} entr${autoChecked === 1 ? "y" : "ies"} to view`
+      : "";
+    showToast(`Found ${errors.length} issue${errors.length === 1 ? "" : "s"}${extra}`, "error");
+  }
+}
+
 // MIDDLE — render simulated prompt
 function renderMiddle() {
   if (!middleBodyEl) return;
@@ -712,23 +1050,40 @@ function renderBlock(block, overlaps) {
     block.kind === "lorebook-entry" && overlaps && overlaps.has(block.entry.id);
   if (isOverlapping) el.dataset.overlap = "true";
 
-  el.appendChild(renderBlockHead(block, { isOverlapping, isSubblock: false }));
+  const validateErrs = state.validationErrors[block.id];
+  if (validateErrs && validateErrs.length) el.dataset.validateError = "true";
 
-  const body = document.createElement("div");
-  body.className = "kaio-block-content";
   const expanded = state.expandedBlocks.has(block.id);
-  if (expanded) body.dataset.expanded = "true";
   const previewHTML = blockPreviewHTML(block, expanded);
-  if (!previewHTML) {
-    body.dataset.empty = "true";
-    body.textContent = blockEmptyHint(block);
-  } else {
+  const raw = blockPreviewRaw(block);
+  // For chat-history we always want the depth substack rendered, but the
+  // parent block has no inline body — the runtime hint folds into the head.
+  const isChatHistory = block.kind === "chat-history";
+  // Compact = render hint inline in the head, no body element. Used for
+  // markers (no resolved content), chat-history shell, and any block whose
+  // own preview is empty.
+  const isCompact = isReadonly || isChatHistory || !previewHTML;
+  const headHint = isCompact ? blockEmptyHint(block) : "";
+
+  if (isCompact) el.dataset.compact = "true";
+
+  el.appendChild(renderBlockHead(block, {
+    isOverlapping,
+    isSubblock: false,
+    headHint,
+  }));
+
+  if (!isCompact) {
+    const body = document.createElement("div");
+    body.className = "kaio-block-content";
+    if (expanded) body.dataset.expanded = "true";
     body.innerHTML = previewHTML;
+    if (needsExpandToggle(raw)) body.dataset.hasToggle = "true";
+    el.appendChild(body);
   }
-  el.appendChild(body);
 
   // Chat history shows nested depth-injected items as sub-blocks
-  if (block.kind === "chat-history") {
+  if (isChatHistory) {
     const all = [
       ...block.depthSections.map((s) => ({
         kind: "section",
@@ -743,53 +1098,110 @@ function renderBlock(block, overlaps) {
         entry: e,
         depth: e.depth ?? 0,
       })),
-    ].sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
+    ].sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
 
     if (all.length) {
       const stack = document.createElement("div");
       stack.className = "kaio-block-substack";
       for (const sub of all) {
-        const subEl = document.createElement("div");
-        subEl.className = "kaio-subblock";
-        const subOverlap =
-          sub.kind === "lorebook-entry" && overlaps && overlaps.has(sub.entry.id);
-        if (subOverlap) subEl.dataset.overlap = "true";
-        subEl.dataset.selected =
-          state.inspecting && state.inspecting.id === sub.id ? "true" : "false";
-        subEl.appendChild(renderBlockHead(sub, { isOverlapping: subOverlap, isSubblock: true }));
-
-        const subBody = document.createElement("div");
-        subBody.className = "kaio-block-content";
-        const subExpanded = state.expandedBlocks.has(sub.id);
-        if (subExpanded) subBody.dataset.expanded = "true";
-        const subHTML = blockPreviewHTML(sub, subExpanded);
-        if (subHTML) subBody.innerHTML = subHTML;
-        else { subBody.dataset.empty = "true"; subBody.textContent = blockEmptyHint(sub); }
-        subEl.appendChild(subBody);
-
-        if (subHTML) subEl.appendChild(makeExpandToggle(sub.id, subExpanded));
-
-        subEl.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          inspectBlock(sub);
-        });
-        stack.appendChild(subEl);
+        stack.appendChild(renderSubblock(sub, overlaps));
       }
       el.appendChild(stack);
     }
   }
 
-  // Expand/compress toggle (skip for read-only markers and chat-history shells
-  // which never have inline content of their own).
-  if (!isReadonly && block.kind !== "chat-history" && previewHTML) {
+  // Expand/compress toggle: only when there's a body that's actually too big
+  // to render at once (or that's been expanded so the user can collapse).
+  if (!isCompact && needsExpandToggle(raw)) {
     el.appendChild(makeExpandToggle(block.id, expanded));
+  }
+
+  if (validateErrs && validateErrs.length) {
+    el.appendChild(renderValidationErrors(validateErrs));
   }
 
   if (!isReadonly) el.addEventListener("click", () => inspectBlock(block));
   return el;
 }
 
-function renderBlockHead(block, { isOverlapping, isSubblock }) {
+function renderSubblock(sub, overlaps) {
+  const subEl = document.createElement("div");
+  subEl.className = "kaio-subblock";
+  const subOverlap =
+    sub.kind === "lorebook-entry" && overlaps && overlaps.has(sub.entry.id);
+  if (subOverlap) subEl.dataset.overlap = "true";
+  const subErrs = state.validationErrors[sub.id];
+  if (subErrs && subErrs.length) subEl.dataset.validateError = "true";
+  subEl.dataset.selected =
+    state.inspecting && state.inspecting.id === sub.id ? "true" : "false";
+
+  const subExpanded = state.expandedBlocks.has(sub.id);
+  const subHTML = blockPreviewHTML(sub, subExpanded);
+  const subRaw = blockPreviewRaw(sub);
+  const isCompactSub = !subHTML;
+  const subHint = isCompactSub ? blockEmptyHint(sub) : "";
+  if (isCompactSub) subEl.dataset.compact = "true";
+
+  subEl.appendChild(renderBlockHead(sub, {
+    isOverlapping: subOverlap,
+    isSubblock: true,
+    headHint: subHint,
+  }));
+
+  if (!isCompactSub) {
+    const subBody = document.createElement("div");
+    subBody.className = "kaio-block-content";
+    if (subExpanded) subBody.dataset.expanded = "true";
+    subBody.innerHTML = subHTML;
+    if (needsExpandToggle(subRaw)) subBody.dataset.hasToggle = "true";
+    subEl.appendChild(subBody);
+    if (needsExpandToggle(subRaw)) {
+      subEl.appendChild(makeExpandToggle(sub.id, subExpanded));
+    }
+  }
+
+  if (subErrs && subErrs.length) {
+    subEl.appendChild(renderValidationErrors(subErrs));
+  }
+
+  subEl.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    inspectBlock(sub);
+  });
+  return subEl;
+}
+
+// Whether a block's preview is long enough to warrant the Expand/Compress
+// toggle. Mirrors the truncation thresholds used in blockPreviewHTML and the
+// 3-line clamp from .kaio-block-content.
+function needsExpandToggle(raw) {
+  if (!raw) return false;
+  if (raw.length > 600) return true;
+  // Count newlines — if there are 3+ lines the clamp is doing real work.
+  let lines = 1;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw.charCodeAt(i) === 10) lines++;
+    if (lines > 3) return true;
+  }
+  return false;
+}
+
+function renderValidationErrors(errs) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-block-validate";
+  for (const e of errs) {
+    const line = document.createElement("div");
+    line.className = "kaio-block-validate-line";
+    const snippet = e.snippet
+      ? ` <code>${escapeHTML(e.snippet)}</code>`
+      : "";
+    line.innerHTML = `⚠ ${escapeHTML(e.message)}${snippet}`;
+    wrap.appendChild(line);
+  }
+  return wrap;
+}
+
+function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
   const head = document.createElement("div");
   head.className = "kaio-block-head";
   const tagText = blockTagText(block);
@@ -807,9 +1219,15 @@ function renderBlockHead(block, { isOverlapping, isSubblock }) {
     ? `<span class="kaio-block-role">depth ${block.depth}</span>`
     : "";
 
+  // Inline hint replaces the now-removed empty body for compact blocks.
+  const hintHTML = headHint
+    ? `<span class="kaio-block-head-hint">${escapeHTML(headHint)}</span>`
+    : "";
+
   head.innerHTML = `
     <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
+    ${hintHTML}
     ${orderHTML}
     ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
     ${depthLabel}
