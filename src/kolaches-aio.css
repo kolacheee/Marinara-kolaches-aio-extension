@@ -61,6 +61,7 @@
 }
 
 .kaio-shell {
+  position: relative;
   margin: auto;
   width: min(1400px, 96vw);
   height: min(900px, 92vh);
@@ -621,6 +622,47 @@
 .kaio-vars-actions .kaio-btn {
   padding: 0.25rem 0.625rem;
   font-size: 0.6875rem;
+}
+
+/* ─── Toast — bottom-right, fades in/out, color-coded ─── */
+.kaio-toast {
+  position: absolute;
+  right: 1rem;
+  bottom: 4rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--card, #0f0f15);
+  color: var(--foreground);
+  border: 1px solid var(--border, #27272a);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 10;
+  max-width: 18rem;
+  white-space: nowrap;
+}
+.kaio-toast[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+.kaio-toast[data-kind="success"] {
+  background: #16321f;
+  color: #4ade80;
+  border-color: #22683a;
+}
+.kaio-toast[data-kind="error"] {
+  background: #3a1c1c;
+  color: #f87171;
+  border-color: #7a2a2a;
+}
+.kaio-toast[data-kind="info"] {
+  background: #1a2742;
+  color: #60a5fa;
+  border-color: #2d4d85;
 }
 
 /* highlighted in-preview variable substitution */

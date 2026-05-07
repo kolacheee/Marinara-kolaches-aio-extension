@@ -34,6 +34,18 @@ const tryParseJSON = (s, fallback) => {
   try { return JSON.parse(s); } catch { return fallback; }
 };
 
+// The /characters list and get-by-id endpoints return the row verbatim, with
+// the entire CharacterData V2 (name, description, personality, etc.) packed
+// into a JSON-string `data` column. Normalize so the rest of the extension can
+// just read `c.data.name`. Idempotent — if `data` is already an object, no-op.
+function normalizeCharacter(c) {
+  if (!c) return c;
+  if (typeof c.data === "string") {
+    return { ...c, data: tryParseJSON(c.data, {}) };
+  }
+  return c;
+}
+
 // ── Global state ───────────────────────────────────────────────
 const state = {
   presets: [],            // [{id, name, ...}]
@@ -196,7 +208,7 @@ async function loadAllSources() {
     ]);
     state.presets    = Array.isArray(presets)    ? presets    : [];
     state.lorebooks  = Array.isArray(lorebooks)  ? lorebooks  : [];
-    state.characters = Array.isArray(characters) ? characters : [];
+    state.characters = Array.isArray(characters) ? characters.map(normalizeCharacter) : [];
     state.personas   = Array.isArray(personas)   ? personas   : [];
   } catch (err) {
     console.error("[kolache-AIO] Failed to load sources", err);
@@ -215,9 +227,10 @@ async function loadLorebookEntries(id) {
   state.lorebookEntries[id] = Array.isArray(list) ? list : [];
 }
 async function loadCharacter(id) {
-  state.characterFull = await api("GET", "/characters/" + id).catch((e) => {
+  const c = await api("GET", "/characters/" + id).catch((e) => {
     console.error(e); showToast("Couldn't load character", "error"); return null;
   });
+  state.characterFull = normalizeCharacter(c);
 }
 async function loadPersona(id) {
   state.personaFull = await api("GET", "/characters/personas/" + id).catch((e) => {
@@ -1664,7 +1677,7 @@ async function saveDraft() {
         break;
       }
       case "character": {
-        const fresh = await api("GET", "/characters/" + d.sourceId);
+        const fresh = normalizeCharacter(await api("GET", "/characters/" + d.sourceId));
         const newData = { ...(fresh.data || {}), ...d.fields };
         await api("PATCH", "/characters/" + d.sourceId, { data: newData });
         await loadCharacter(d.sourceId);
