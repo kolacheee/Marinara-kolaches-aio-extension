@@ -58,6 +58,15 @@ const state = {
   inspecting: null,              // {kind, id} – current right-panel target
   draft: null,                   // local edits before save
   isDirty: false,
+
+  // ── Visual preview + inline variable editing ──
+  // variablePreviews[variableName] = { cbId, optionId, value, savedValue }
+  //   `value` is the in-progress (possibly edited) text used for substitution.
+  //   `savedValue` is the option's value as last loaded from the server, used
+  //   to detect dirty state for the Save button.
+  variablePreviews: {},
+  expandedBlocks: new Set(),     // block IDs whose preview is shown in full
+  variablesPanelCollapsed: false,
 };
 
 // ── DOM refs (populated by buildConsole) ──────────────────────
@@ -241,6 +250,8 @@ function renderLeft() {
       state.inspecting = null;
       state.draft = null;
       state.isDirty = false;
+      state.variablePreviews = {};
+      state.expandedBlocks.clear();
       if (id) await loadPresetFull(id);
       renderAll();
     },
@@ -634,12 +645,49 @@ function renderMiddle() {
     return;
   }
 
+  const overlaps = computeEntryOverlaps(blocks);
   for (const b of blocks) {
-    middleBodyEl.appendChild(renderBlock(b));
+    middleBodyEl.appendChild(renderBlock(b, overlaps));
   }
 }
 
-function renderBlock(block) {
+// Returns a Set of entry IDs whose `order` collides with another displayed
+// entry within the same anchor bucket (and same depth, for depth entries).
+function computeEntryOverlaps(blocks) {
+  const overlap = new Set();
+  // Top-level entries (before-char / after-char anchors)
+  const topByPosition = new Map(); // position → Map<order, entryId[]>
+  for (const b of blocks) {
+    if (b.kind !== "lorebook-entry") continue;
+    const pos = b.entry.position ?? 0;
+    const ord = b.entry.order ?? 0;
+    if (!topByPosition.has(pos)) topByPosition.set(pos, new Map());
+    const byOrder = topByPosition.get(pos);
+    if (!byOrder.has(ord)) byOrder.set(ord, []);
+    byOrder.get(ord).push(b.entry.id);
+  }
+  for (const byOrder of topByPosition.values()) {
+    for (const ids of byOrder.values()) {
+      if (ids.length > 1) for (const id of ids) overlap.add(id);
+    }
+  }
+  // Depth-injected entries (inside chat-history blocks)
+  for (const b of blocks) {
+    if (b.kind !== "chat-history") continue;
+    const byKey = new Map(); // "depth|order" → entryId[]
+    for (const e of b.depthEntries || []) {
+      const key = (e.depth ?? 0) + "|" + (e.order ?? 0);
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(e.id);
+    }
+    for (const ids of byKey.values()) {
+      if (ids.length > 1) for (const id of ids) overlap.add(id);
+    }
+  }
+  return overlap;
+}
+
+function renderBlock(block, overlaps) {
   const el = document.createElement("div");
   el.className = "kaio-block";
   const isReadonly = block.kind === "marker"; // markers w/o resolved content
@@ -647,25 +695,22 @@ function renderBlock(block) {
   el.dataset.selected =
     state.inspecting && state.inspecting.id === block.id ? "true" : "false";
 
-  const head = document.createElement("div");
-  head.className = "kaio-block-head";
-  const tagText = blockTagText(block);
-  const role = block.section?.role || (block.entry && block.entry.role) || "";
-  head.innerHTML = `
-    <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
-    <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
-    ${role ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
-  `;
-  el.appendChild(head);
+  const isOverlapping =
+    block.kind === "lorebook-entry" && overlaps && overlaps.has(block.entry.id);
+  if (isOverlapping) el.dataset.overlap = "true";
+
+  el.appendChild(renderBlockHead(block, { isOverlapping, isSubblock: false }));
 
   const body = document.createElement("div");
   body.className = "kaio-block-content";
-  const preview = blockPreview(block);
-  if (!preview) {
+  const expanded = state.expandedBlocks.has(block.id);
+  if (expanded) body.dataset.expanded = "true";
+  const previewHTML = blockPreviewHTML(block, expanded);
+  if (!previewHTML) {
     body.dataset.empty = "true";
     body.textContent = blockEmptyHint(block);
   } else {
-    body.textContent = preview;
+    body.innerHTML = previewHTML;
   }
   el.appendChild(body);
 
@@ -693,16 +738,24 @@ function renderBlock(block) {
       for (const sub of all) {
         const subEl = document.createElement("div");
         subEl.className = "kaio-subblock";
+        const subOverlap =
+          sub.kind === "lorebook-entry" && overlaps && overlaps.has(sub.entry.id);
+        if (subOverlap) subEl.dataset.overlap = "true";
         subEl.dataset.selected =
           state.inspecting && state.inspecting.id === sub.id ? "true" : "false";
-        subEl.innerHTML = `
-          <div class="kaio-block-head">
-            <span class="kaio-block-tag" data-kind="${sub.kind}">${blockTagText(sub)}</span>
-            <span class="kaio-block-name">${escapeHTML(blockTitle(sub))}</span>
-            <span class="kaio-block-role">depth ${sub.depth}</span>
-          </div>
-          <div class="kaio-block-content">${escapeHTML(blockPreview(sub) || blockEmptyHint(sub))}</div>
-        `;
+        subEl.appendChild(renderBlockHead(sub, { isOverlapping: subOverlap, isSubblock: true }));
+
+        const subBody = document.createElement("div");
+        subBody.className = "kaio-block-content";
+        const subExpanded = state.expandedBlocks.has(sub.id);
+        if (subExpanded) subBody.dataset.expanded = "true";
+        const subHTML = blockPreviewHTML(sub, subExpanded);
+        if (subHTML) subBody.innerHTML = subHTML;
+        else { subBody.dataset.empty = "true"; subBody.textContent = blockEmptyHint(sub); }
+        subEl.appendChild(subBody);
+
+        if (subHTML) subEl.appendChild(makeExpandToggle(sub.id, subExpanded));
+
         subEl.addEventListener("click", (ev) => {
           ev.stopPropagation();
           inspectBlock(sub);
@@ -713,8 +766,57 @@ function renderBlock(block) {
     }
   }
 
+  // Expand/compress toggle (skip for read-only markers and chat-history shells
+  // which never have inline content of their own).
+  if (!isReadonly && block.kind !== "chat-history" && previewHTML) {
+    el.appendChild(makeExpandToggle(block.id, expanded));
+  }
+
   if (!isReadonly) el.addEventListener("click", () => inspectBlock(block));
   return el;
+}
+
+function renderBlockHead(block, { isOverlapping, isSubblock }) {
+  const head = document.createElement("div");
+  head.className = "kaio-block-head";
+  const tagText = blockTagText(block);
+  const role = block.section?.role || (block.entry && block.entry.role) || "";
+
+  let orderHTML = "";
+  if (block.kind === "lorebook-entry") {
+    const ord = block.entry.order ?? 0;
+    orderHTML = `<span class="kaio-block-order"${isOverlapping ? ' data-overlap="true"' : ''}>order ${ord}${isOverlapping ? ' — OVERLAPPING!' : ''}</span>`;
+  }
+
+  // For depth-injected sub-blocks, the existing depth label still appears at
+  // the right; the order indicator (if any) sits to its left.
+  const depthLabel = isSubblock && block.depth !== undefined
+    ? `<span class="kaio-block-role">depth ${block.depth}</span>`
+    : "";
+
+  head.innerHTML = `
+    <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
+    <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
+    ${orderHTML}
+    ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
+    ${depthLabel}
+  `;
+  return head;
+}
+
+function makeExpandToggle(blockId, expanded) {
+  const btn = document.createElement("button");
+  btn.className = "kaio-expand-toggle";
+  btn.type = "button";
+  btn.title = expanded ? "Show compressed preview" : "Show full content";
+  btn.textContent = expanded ? "Compress" : "Expand";
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (state.expandedBlocks.has(blockId)) state.expandedBlocks.delete(blockId);
+    else state.expandedBlocks.add(blockId);
+    renderMiddle();
+  });
+  return btn;
 }
 
 function blockTagText(block) {
@@ -737,19 +839,63 @@ function blockTitle(block) {
   if (block.kind === "marker")         return block.section.name || `[${block.markerType}]`;
   return "Block";
 }
-function blockPreview(block) {
-  if (block.kind === "section")        return (block.section.content || "").slice(0, 600);
-  if (block.kind === "lorebook-entry") return (block.entry.content || "").slice(0, 600);
+function blockPreviewRaw(block) {
+  if (block.kind === "section")        return block.section.content || "";
+  if (block.kind === "lorebook-entry") return block.entry.content || "";
   if (block.kind === "character") {
     const d = block.character.data || {};
     const fields = block.fields || ["description", "personality", "scenario", "system_prompt"];
-    return fields.map((f) => d[f] ? `[${f}]\n${d[f]}` : "").filter(Boolean).join("\n\n").slice(0, 600);
+    return fields.map((f) => d[f] ? `[${f}]\n${d[f]}` : "").filter(Boolean).join("\n\n");
   }
   if (block.kind === "persona") {
     const p = block.persona || {};
-    return [p.description, p.personality, p.scenario].filter(Boolean).join("\n\n").slice(0, 600);
+    return [p.description, p.personality, p.scenario].filter(Boolean).join("\n\n");
   }
   return "";
+}
+// Build the HTML body for a block's preview, applying variable substitution
+// and respecting per-block expansion state. Returns "" for empty content.
+//
+// Truncation happens in raw-text space *before* escaping so a `<` in the
+// source never gets escaped twice (which would render as the literal "&lt;").
+function blockPreviewHTML(block, expanded) {
+  const raw = blockPreviewRaw(block);
+  if (!raw) return "";
+  const text = expanded ? raw : raw.slice(0, 600);
+  const subs = activeVariableSubs();
+  if (!subs.length) return escapeHTML(text);
+
+  const pattern = subs
+    .map((s) => `\\{\\{(?:getvar::)?${escapeRegex(s.name)}\\}\\}`)
+    .join("|");
+  const re = new RegExp(pattern, "gi");
+  let out = "";
+  let lastIdx = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    out += escapeHTML(text.slice(lastIdx, m.index));
+    const inner = m[0].slice(2, -2); // strip "{{" / "}}"
+    const name = inner.replace(/^getvar::/i, "");
+    const sub = subs.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    const value = sub ? sub.value : "";
+    out += `<mark class="kaio-var-preview" title="Preview of {{${escapeHTML(name)}}}">${escapeHTML(value)}</mark>`;
+    lastIdx = m.index + m[0].length;
+  }
+  out += escapeHTML(text.slice(lastIdx));
+  return out;
+}
+function activeVariableSubs() {
+  const cbs = (state.presetFull && state.presetFull.choiceBlocks) || [];
+  const out = [];
+  for (const cb of cbs) {
+    const entry = state.variablePreviews[cb.variableName];
+    if (!entry || entry.value === undefined || entry.value === null) continue;
+    out.push({ name: cb.variableName, value: String(entry.value) });
+  }
+  return out;
+}
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function blockEmptyHint(block) {
   switch (block.kind) {
@@ -889,10 +1035,21 @@ function renderRight() {
   rightBodyEl.innerHTML = "";
   rightFooterEl.innerHTML = "";
 
+  // Variables panel only shows when the currently-inspected block's content
+  // references one or more of the preset's choice-block variables. Pure visual
+  // preview — never edits anything.
+  if (state.inspecting) {
+    const referencedVars = collectReferencedVariables(state.inspecting);
+    if (referencedVars.length) {
+      rightBodyEl.appendChild(renderVariablesPanel(referencedVars));
+    }
+  }
+
   if (!state.inspecting || !state.draft) {
-    rightBodyEl.innerHTML = `<div class="kaio-right-empty">
-      Click a block in the simulated prompt to inspect &amp; edit it here.
-    </div>`;
+    const empty = document.createElement("div");
+    empty.className = "kaio-right-empty";
+    empty.innerHTML = "Click a block in the simulated prompt to inspect &amp; edit it here.";
+    rightBodyEl.appendChild(empty);
     return;
   }
 
@@ -908,10 +1065,15 @@ function renderRight() {
         selectField("Role", f.role, "role", ["system", "user", "assistant"]),
         selectField("Position", f.injectionPosition, "injectionPosition", ["ordered", "depth"]),
       ));
-      rightBodyEl.appendChild(rowOf(
-        numberField("Depth", f.injectionDepth, "injectionDepth"),
-        numberField("Order", f.injectionOrder, "injectionOrder"),
-      ));
+      // Depth & Order only matter for depth-injected sections — ordered sections
+      // are sequenced by the preset's sectionOrder array, so showing the fields
+      // would imply they do something they don't.
+      if (f.injectionPosition === "depth") {
+        rightBodyEl.appendChild(rowOf(
+          numberField("Depth", f.injectionDepth, "injectionDepth"),
+          numberField("Order", f.injectionOrder, "injectionOrder"),
+        ));
+      }
       rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
       break;
 
@@ -1204,6 +1366,202 @@ function multiSelectField(label, value, key, options) {
   wrap.appendChild(list);
   return wrap;
 }
+// Returns the parsed option array for a choice block (the API returns it as a
+// JSON-encoded text column, but tolerate it already being an array).
+function choiceBlockOptions(cb) {
+  if (Array.isArray(cb.options)) return cb.options;
+  return tryParseJSON(cb.options, []);
+}
+
+// Returns the choice blocks whose `{{varName}}` (or `{{getvar::varName}}`) is
+// referenced in the inspected block's source text. Used to scope the
+// variables panel to only what's actually relevant to the selection.
+function collectReferencedVariables(block) {
+  const cbs = (state.presetFull && state.presetFull.choiceBlocks) || [];
+  if (!cbs.length || !block) return [];
+  const text = blockPreviewRaw(block);
+  if (!text) return [];
+  const out = [];
+  for (const cb of cbs) {
+    const re = new RegExp(
+      "\\{\\{(?:getvar::)?" + escapeRegex(cb.variableName) + "\\}\\}",
+      "i",
+    );
+    if (re.test(text)) out.push(cb);
+  }
+  return out;
+}
+
+// Variables panel — pick an option for live substitution in the Simulated
+// Prompt, then optionally edit that option's value and save back to the preset.
+function renderVariablesPanel(cbs) {
+  if (!cbs || !cbs.length) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-vars-panel";
+  if (state.variablesPanelCollapsed) wrap.dataset.collapsed = "true";
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "kaio-vars-header";
+  header.innerHTML = `
+    <span class="kaio-vars-caret">▾</span>
+    <span class="kaio-vars-title">Preset variables</span>
+    <span class="kaio-vars-count">${cbs.length}</span>
+  `;
+  header.addEventListener("click", () => {
+    state.variablesPanelCollapsed = !state.variablesPanelCollapsed;
+    renderRight();
+  });
+  wrap.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "kaio-vars-body";
+
+  const help = document.createElement("div");
+  help.className = "kaio-field-help";
+  help.textContent = "Pick an option to substitute it in the Simulated Prompt. While an option is selected, its value can be edited and saved.";
+  body.appendChild(help);
+
+  for (const cb of cbs) {
+    body.appendChild(renderVariableRow(cb));
+  }
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function renderVariableRow(cb) {
+  const row = document.createElement("div");
+  row.className = "kaio-field kaio-vars-row";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  lab.textContent = `{{${cb.variableName}}}`;
+  if (cb.question) lab.title = cb.question;
+  row.appendChild(lab);
+
+  const opts = choiceBlockOptions(cb);
+  const sel = document.createElement("select");
+  sel.className = "kaio-select";
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "— No preview —";
+  sel.appendChild(blank);
+  const current = state.variablePreviews[cb.variableName];
+  for (const opt of opts) {
+    const o = document.createElement("option");
+    o.value = opt.id || opt.value || "";
+    o.textContent = opt.label || opt.value || opt.id || "(unnamed option)";
+    if (current && current.optionId === o.value) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", () => {
+    const optId = sel.value;
+    if (!optId) {
+      delete state.variablePreviews[cb.variableName];
+    } else {
+      const picked = opts.find((o) => (o.id || o.value) === optId);
+      const value = picked ? picked.value : "";
+      state.variablePreviews[cb.variableName] = {
+        cbId: cb.id,
+        optionId: optId,
+        value,
+        savedValue: value,
+      };
+    }
+    renderRight();   // re-render so the editor textarea appears/disappears
+    renderMiddle();
+  });
+  row.appendChild(sel);
+
+  // If an option is currently selected, expose an editable textarea for its
+  // value. Edits are live-substituted in the middle column; Save persists the
+  // change back through the preset's choice-block API.
+  if (current && current.optionId) {
+    const ta = document.createElement("textarea");
+    ta.className = "kaio-textarea kaio-vars-edit";
+    ta.rows = 4;
+    ta.value = current.value ?? "";
+    ta.addEventListener("input", () => {
+      current.value = ta.value;
+      // Update Save / Revert button states without a full re-render so the
+      // textarea keeps its caret position.
+      const dirty = current.value !== current.savedValue;
+      const saveBtn = row.querySelector('[data-act="vsave"]');
+      const revertBtn = row.querySelector('[data-act="vrevert"]');
+      if (saveBtn) saveBtn.disabled = !dirty;
+      if (revertBtn) revertBtn.disabled = !dirty;
+      renderMiddle();
+    });
+    row.appendChild(ta);
+
+    const actions = document.createElement("div");
+    actions.className = "kaio-vars-actions";
+    const dirty = current.value !== current.savedValue;
+
+    const revertBtn = document.createElement("button");
+    revertBtn.type = "button";
+    revertBtn.className = "kaio-btn";
+    revertBtn.dataset.act = "vrevert";
+    revertBtn.textContent = "Revert";
+    revertBtn.disabled = !dirty;
+    revertBtn.addEventListener("click", () => {
+      current.value = current.savedValue;
+      ta.value = current.savedValue;
+      renderRight();
+      renderMiddle();
+    });
+    actions.appendChild(revertBtn);
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "kaio-btn kaio-btn-primary";
+    saveBtn.dataset.act = "vsave";
+    saveBtn.textContent = "Save";
+    saveBtn.disabled = !dirty;
+    saveBtn.addEventListener("click", () => saveVariableOption(cb));
+    actions.appendChild(saveBtn);
+    row.appendChild(actions);
+  }
+  return row;
+}
+
+async function saveVariableOption(cb) {
+  const presetId = state.presetFull && state.presetFull.preset && state.presetFull.preset.id;
+  const entry = state.variablePreviews[cb.variableName];
+  if (!presetId || !entry) return;
+  // Build the new options array, replacing the edited option's value.
+  const opts = choiceBlockOptions(cb).map((o) => {
+    if ((o.id || o.value) === entry.optionId) return { ...o, value: entry.value };
+    return o;
+  });
+  try {
+    await api("PATCH", "/prompts/" + presetId + "/variables/" + cb.id, {
+      options: opts,
+    });
+    await loadPresetFull(presetId);
+    // Re-anchor the preview entry to the freshly-loaded option (savedValue
+    // catches up). cbId / optionId may be the same; refresh defensively.
+    const fresh = (state.presetFull.choiceBlocks || []).find((c) => c.id === cb.id);
+    if (fresh) {
+      const freshOpts = choiceBlockOptions(fresh);
+      const picked = freshOpts.find((o) => (o.id || o.value) === entry.optionId);
+      if (picked) {
+        state.variablePreviews[cb.variableName] = {
+          cbId: fresh.id,
+          optionId: entry.optionId,
+          value: picked.value,
+          savedValue: picked.value,
+        };
+      }
+    }
+    renderAll();
+    showToast("Saved ✓", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Variable save failed", err);
+    showToast("Save failed — see console", "error");
+  }
+}
+
 function sectionHeader(text) {
   const h = document.createElement("div");
   h.className = "kaio-section-header";
@@ -1220,6 +1578,13 @@ function onFieldChange(key, value) {
   if (!state.draft) return;
   state.draft.fields[key] = value;
   state.isDirty = isDraftDirty();
+  // Section's injectionPosition toggles whether the Depth/Order row is
+  // rendered, so re-render the whole inspector when it changes. Other fields
+  // can patch the footer in place to preserve focus / caret.
+  if (state.draft.kind === "section" && key === "injectionPosition") {
+    renderRight();
+    return;
+  }
   const dot = rightFooterEl.querySelector(".kaio-dirty-dot");
   if (dot) dot.dataset.dirty = state.isDirty ? "true" : "false";
   const txt = rightFooterEl.querySelector("span:nth-child(2)");

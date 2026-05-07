@@ -11,10 +11,12 @@ When you toggle the extension on, a 🥞 button appears in the top-right tab str
 | Column | Purpose |
 |---|---|
 | **Left — Sources** | Single-select dropdowns for Preset / Character / Persona, plus a multi-lorebook section with a per-lorebook entry checklist. |
-| **Middle — Simulated Prompt** | Every selected piece rendered in the *exact order* the engine would assemble it — preset sections in `sectionOrder`, lorebook entries placed at `world_info_before` / `world_info_after` / depth markers per the entry's `position` and `order`, character & persona slotted into their respective marker sections, depth-injected entries shown nested inside the chat-history block at their depth. |
-| **Right — Inspector** | Editable fields for whichever block you clicked. Save / Revert buttons in the footer. Switching to another block while dirty fires a Save / Revert / Stay confirmation. |
+| **Middle — Simulated Prompt** | Every selected piece rendered in the *exact order* the engine would assemble it — preset sections in `sectionOrder`, lorebook entries placed at `world_info_before` / `world_info_after` / depth markers per the entry's `position` and `order`, character & persona slotted into their respective marker sections, depth-injected entries shown nested inside the chat-history block at their depth. Each lorebook entry shows its `order` as a badge at the top-right; if two displayed entries collide on `order` within the same anchor (and `depth`, for depth-injected ones) both blocks turn red and the badge reads **OVERLAPPING!**. Every block has an **Expand / Compress** toggle in the bottom-right that flips between the 600-char preview and the full content. |
+| **Right — Inspector** | Editable fields for whichever block you clicked. Save / Revert buttons in the footer. Switching to another block while dirty fires a Save / Revert / Stay confirmation. When the inspected block's content references one or more of the preset's variables, a collapsible **Preset variables** panel appears at the top — pick an option to substitute it live in the Simulated Prompt, and edit the option's value in place to PATCH it back to the preset. |
 
 For lorebook entries the inspector exposes every field the engine actually supports: name, content, description, primary keys, secondary keys, position, depth, order, role, enabled, constant, selective + selective logic, probability, scan depth, match-whole-words, case-sensitive, treat-as-regex, character/tag/trigger filter modes + values, the seven additional matching sources, sticky / cooldown / delay / ephemeral, group + group weight, tag, folder ID, prevent-recursion, locked.
+
+For preset sections, the editor only shows **Depth** and **Order** when **Position** is set to `depth` — those fields don't do anything for `ordered` sections (which sequence by the preset's `sectionOrder`), so they're hidden to avoid implying otherwise.
 
 ## Install
 
@@ -37,6 +39,7 @@ To uninstall, find it in Settings → Extensions and click the trash icon. The �
 | `tools/build.mjs` | Tiny Node script that bundles `src/*` into `kolaches-aio.json`. Run with `node tools/build.mjs` after editing source. |
 | `LICENSE` | MIT. |
 | `README.md` | This file. |
+| `CHANGELOG.md` | Per-release notes. |
 
 ## Editing the source
 
@@ -62,6 +65,7 @@ Built against Marinara Engine v1.5.7. Endpoints used:
 - `PATCH /api/lorebooks/:id/entries/:entryId`
 - `GET  /api/characters` / `GET /api/characters/:id` / `PATCH /api/characters/:id`
 - `GET  /api/characters/personas/list` / `GET /api/characters/personas/:id` / `PATCH /api/characters/personas/:id`
+- `PATCH /api/prompts/:presetId/variables/:variableId` (used by the inline variable-value editor)
 
 If a future Marinara release renames or reshapes any of those, the extension will surface the failure as a "Couldn't load …" / "Save failed — see console" toast. File an issue and I'll patch.
 
