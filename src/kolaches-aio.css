@@ -448,16 +448,54 @@
 }
 
 .kaio-field {
-  margin-bottom: 0.875rem;
+  margin-bottom: 0.5rem;
 }
 .kaio-field-label {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.625rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted-foreground);
-  margin-bottom: 0.3125rem;
+  margin-bottom: 0.1875rem;
+}
+
+/* ─── Tooltip help icon ─────────────────────── */
+.kaio-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--primary, #a78bfa);
+  font-size: 0.5rem;
+  font-weight: 700;
+  cursor: default;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.kaio-tooltip-popup {
+  position: fixed;
+  width: 210px;
+  /* Solid fallbacks — inline styles from JS override these with live theme values */
+  background: var(--popover, var(--card, #0f0f15));
+  border: 1px solid var(--border, #27272a);
+  color: var(--popover-foreground, var(--foreground, #f4f4f5));
+  font-size: 0.6875rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 9999;
+  line-height: 1.4;
+  white-space: normal;
 }
 .kaio-input,
 .kaio-textarea {
@@ -496,14 +534,14 @@
 
 /* section headers inside the inspector */
 .kaio-section-header {
-  margin-top: 0.875rem;
-  margin-bottom: 0.5rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
   font-size: 0.625rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--primary, #a78bfa);
-  padding-bottom: 0.25rem;
+  padding-bottom: 0.1875rem;
   border-bottom: 1px solid var(--border, #27272a);
 }
 .kaio-section-header:first-child { margin-top: 0; }
@@ -529,8 +567,43 @@
   gap: 0.5rem;
   font-size: 0.75rem;
   color: var(--foreground);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
 }
+
+/* ─── Matching mode 3-state orb selector ────── */
+.kaio-match-mode {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+.kaio-match-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  border: 1px solid var(--border, #27272a);
+  background: var(--secondary, #1c1c25);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.kaio-match-btn:hover { background: var(--accent, #25252e); color: var(--foreground); }
+.kaio-match-btn[data-active="true"] { color: var(--foreground); }
+.kaio-match-btn[data-mode="normal"][data-active="true"]    { border-color: #64748b; background: rgba(100,116,139,0.15); }
+.kaio-match-btn[data-mode="selective"][data-active="true"] { border-color: var(--primary,#a78bfa); background: rgba(167,139,250,0.15); color: var(--primary,#a78bfa); }
+.kaio-match-btn[data-mode="constant"][data-active="true"]  { border-color: #fbbf24; background: rgba(251,191,36,0.15); color: #fbbf24; }
+.kaio-match-orb {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.kaio-match-orb[data-mode="normal"]    { background: #64748b; }
+.kaio-match-orb[data-mode="selective"] { background: var(--primary, #a78bfa); }
+.kaio-match-orb[data-mode="constant"]  { background: #fbbf24; }
 .kaio-checkbox input { accent-color: var(--primary, #a78bfa); }
 
 .kaio-field-help {

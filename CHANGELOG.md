@@ -2,6 +2,23 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.2.1] — 2026-05-08
+
+Inspector UX pass — less scrolling, better discoverability, and a matching-mode selector that mirrors the familiar SillyTavern/Marinara lorebook convention.
+
+### Changed
+
+- **Matching mode is now a 3-state orb selector** instead of two separate checkboxes for Constant and Selective. A row of three pill buttons — ● Normal, ● Selective, ● Constant — color-coded gray / purple / gold to match the convention most users already know from SillyTavern and Marinara's own lorebook panel. The Selective Logic dropdown only appears when Selective mode is active.
+- **Reduced inspector verticality.** Tightened field margins, section header spacing, and checkbox gaps across the board. Content and Description textareas default to shorter row counts (6 and 3 respectively) since they're resizable. The net effect is significantly less scrolling to reach the bottom of a lorebook entry.
+- **Parenthetical hints removed from all labels.** Labels like "Probability (0–1)" and "Sticky (turns)" are now just "Probability" and "Sticky".
+- **Tooltip help icons on field labels.** A small `?` badge next to each label reveals a styled tooltip on hover explaining what the field does, replacing the old parenthetical hints with richer context available on demand. Tooltip positioning is viewport-aware (clamped horizontally, flips below when there isn't room above).
+
+### Fixed
+
+- **Matching mode buttons didn't visually update until Save.** Clicking a mode button updated the draft but didn't re-render the inspector, so all three buttons appeared highlighted until the next full re-render.
+- **Save / Revert jumped the inspector to the top.** The right column's scroll position is now preserved across re-renders — clicking Save or Revert keeps you where you were.
+- **Tooltip background was semi-transparent on themes with alpha in `--card`.** The tooltip now resolves theme colors at runtime and forces the card background opaque, then appends outside the overlay's `backdrop-filter` stacking context. Works correctly across all themes.
+
 ## [1.2.0] — 2026-05-07
 
 A v1.2.0 focused on making the Simulated Prompt column easier to scan at a glance and on catching the kinds of mistakes that silently break a prompt at runtime — orphaned XML tags and malformed `{{macro}}` syntax.

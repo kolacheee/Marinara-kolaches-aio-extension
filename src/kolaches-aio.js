@@ -94,6 +94,67 @@ let middleBodyEl = null;
 let rightBodyEl = null;
 let rightFooterEl = null;
 let toastEl = null;
+let activeTipEl = null;
+
+// Resolve a CSS variable to an opaque rgb() string by temporarily applying it
+// to a hidden element, reading the computed value, and stripping any alpha.
+// Works with any color format the browser supports (hex, rgb, hsl, oklch, …).
+function resolveOpaque(varName, fallback) {
+  const tmp = document.createElement("div");
+  tmp.style.display = "none";
+  tmp.style.backgroundColor = `var(${varName}, ${fallback})`;
+  overlayEl.appendChild(tmp);
+  const resolved = getComputedStyle(tmp).backgroundColor;
+  tmp.remove();
+  // getComputedStyle always returns rgb(r,g,b) or rgba(r,g,b,a)
+  const m = resolved.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
+  if (m) return `rgb(${m[1]}, ${m[2]}, ${m[3]})`;
+  return fallback;
+}
+function resolveVar(varName, fallback) {
+  const tmp = document.createElement("div");
+  tmp.style.display = "none";
+  tmp.style.color = `var(${varName}, ${fallback})`;
+  overlayEl.appendChild(tmp);
+  const resolved = getComputedStyle(tmp).color;
+  tmp.remove();
+  return resolved || fallback;
+}
+
+function showTip(tipSpan) {
+  hideTip();
+  const text = tipSpan.dataset.tip;
+  if (!text) return;
+  const popup = document.createElement("div");
+  popup.className = "kaio-tooltip-popup";
+  popup.textContent = text;
+  // Resolve theme colors from the overlay scope, force card background opaque
+  // so the tooltip is solid regardless of theme alpha. Append to document.body
+  // to stay outside the overlay's backdrop-filter stacking context.
+  if (overlayEl) {
+    popup.style.backgroundColor = resolveOpaque("--card", "#0f0f15");
+    popup.style.color = resolveVar("--foreground", "#e4e4e7");
+    popup.style.borderColor = resolveVar("--border", "#27272a");
+  }
+  popup.style.left = "-9999px";
+  popup.style.top = "0";
+  document.body.appendChild(popup);
+  const tipW = 210;
+  const tipH = popup.offsetHeight;
+  const iconRect = tipSpan.getBoundingClientRect();
+  // Center above the icon, then clamp to viewport with 8px inset
+  let left = iconRect.left + iconRect.width / 2 - tipW / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8));
+  let top = iconRect.top - tipH - 6;
+  // Flip below if there's not enough space above
+  if (top < 8) top = iconRect.bottom + 6;
+  popup.style.left = left + "px";
+  popup.style.top = top + "px";
+  activeTipEl = popup;
+}
+function hideTip() {
+  if (activeTipEl) { activeTipEl.remove(); activeTipEl = null; }
+}
 
 // ── Top-bar 🥞 button injection ──────────────────────────────
 function injectTopbarButton() {
@@ -171,6 +232,15 @@ function buildConsole() {
   rightFooterEl = overlayEl.querySelector('[data-region="right-footer"]');
   toastEl       = overlayEl.querySelector('[data-region="toast"]');
 
+  // Tooltip delegation — works across all dynamic content in the overlay
+  overlayEl.addEventListener("mouseover", (e) => {
+    const tip = e.target.closest(".kaio-tip");
+    if (tip) showTip(tip);
+  });
+  overlayEl.addEventListener("mouseout", (e) => {
+    if (e.target.closest(".kaio-tip")) hideTip();
+  });
+
   overlayEl.querySelector('[data-action="close"]').addEventListener("click", attemptClose);
   overlayEl.querySelector('[data-action="refresh"]').addEventListener("click", async () => {
     await loadAllSources();
@@ -218,6 +288,7 @@ function attemptClose() {
 }
 function closeConsoleNow() {
   if (overlayEl) overlayEl.dataset.open = "false";
+  hideTip();
 }
 
 // ── Loading data ──────────────────────────────────────────────
@@ -1463,6 +1534,7 @@ function makeDraft(block) {
 
 function renderRight() {
   if (!rightBodyEl || !rightFooterEl) return;
+  const savedScroll = rightBodyEl.scrollTop;
   rightBodyEl.innerHTML = "";
   rightFooterEl.innerHTML = "";
 
@@ -1508,60 +1580,76 @@ function renderRight() {
       rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
       break;
 
-    case "lorebook-entry":
+    case "lorebook-entry": {
+      const matchMode = f.constant ? "constant" : (f.selective ? "selective" : "normal");
+
       // ── Basic ─────────────────────────────────────
       rightBodyEl.appendChild(sectionHeader("Basic"));
       rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
-      rightBodyEl.appendChild(field("Content", f.content, "content", "textarea"));
-      rightBodyEl.appendChild(field("Description", f.description, "description", "textarea"));
-      rightBodyEl.appendChild(field("Keys (primary, comma-separated)", f.keys, "keys", "input"));
-      rightBodyEl.appendChild(field("Secondary keys (comma-separated)", f.secondaryKeys, "secondaryKeys", "input"));
+      rightBodyEl.appendChild(field("Content", f.content, "content", "textarea", null, 6));
+      rightBodyEl.appendChild(field("Description", f.description, "description", "textarea",
+        "Brief summary used by the Knowledge Router to decide whether to inject this entry. Not sent to the AI as content.", 3));
+      rightBodyEl.appendChild(field("Primary keys", f.keys, "keys", "input",
+        "Comma-separated keywords that trigger this entry when found in recent chat messages."));
+      rightBodyEl.appendChild(field("Secondary keys", f.secondaryKeys, "secondaryKeys", "input",
+        "Comma-separated secondary keywords. Used with Selective matching to further filter when this entry fires."));
       rightBodyEl.appendChild(rowOf(
         selectField("Position", String(f.position), "position",
           [["0","before char"],["1","after char"],["2","depth"]]),
         selectField("Role", f.role, "role", ["system", "user", "assistant"]),
       ));
       rightBodyEl.appendChild(rowOf(
-        numberField("Depth", f.depth, "depth"),
-        numberField("Order", f.order, "order"),
+        numberField("Depth", f.depth, "depth",
+          "How many messages deep to insert this entry when Position is set to depth."),
+        numberField("Order", f.order, "order",
+          "Insertion order relative to other lorebook entries at the same position. Lower numbers insert first."),
       ));
       rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
-      rightBodyEl.appendChild(checkboxField("Constant (always inject)", f.constant, "constant"));
+      rightBodyEl.appendChild(matchingModeField(matchMode));
+      if (matchMode === "selective") {
+        rightBodyEl.appendChild(
+          selectField("Selective logic", f.selectiveLogic, "selectiveLogic", ["and", "or", "not"],
+            "How primary and secondary keys are combined. AND = both must match, OR = either, NOT = primary matches but secondary does not."),
+        );
+      }
 
       // ── Matching options ──────────────────────────
       rightBodyEl.appendChild(sectionHeader("Matching options"));
       rightBodyEl.appendChild(rowOf(
-        checkboxField("Selective", f.selective, "selective"),
-        selectField("Selective logic", f.selectiveLogic, "selectiveLogic", ["and", "or", "not"]),
+        nullableNumberField("Probability", f.probability, "probability",
+          { step: "0.05", min: 0, max: 1 },
+          "Chance this entry is injected each time it triggers (0–100%). Leave empty to always inject when matched."),
+        nullableNumberField("Scan depth", f.scanDepth, "scanDepth",
+          { step: "1", min: 0 },
+          "How many messages back to scan for keywords. Leave empty to use the global lorebook default."),
       ));
       rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Probability (0–1)", f.probability, "probability",
-          { step: "0.05", min: 0, max: 1 }),
-        nullableNumberField("Scan depth (override)", f.scanDepth, "scanDepth",
-          { step: "1", min: 0 }),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        checkboxField("Match whole words", f.matchWholeWords, "matchWholeWords"),
+        checkboxField("Match whole words", f.matchWholeWords, "matchWholeWords",
+          "Only trigger on whole-word matches. Prevents partial matches like 'cat' matching 'scatter'."),
         checkboxField("Case sensitive", f.caseSensitive, "caseSensitive"),
       ));
-      rightBodyEl.appendChild(checkboxField("Treat keys as regex", f.useRegex, "useRegex"));
+      rightBodyEl.appendChild(checkboxField("Treat keys as regex", f.useRegex, "useRegex",
+        "Interpret primary and secondary keys as regular expressions instead of plain text."));
 
       // ── Context filters ───────────────────────────
       rightBodyEl.appendChild(sectionHeader("Context filters"));
       rightBodyEl.appendChild(rowOf(
         selectField("Character mode", f.characterFilterMode, "characterFilterMode",
           ["any", "include", "exclude"]),
-        field("Character IDs (comma-separated)", f.characterFilterIds, "characterFilterIds", "input"),
+        field("Character IDs", f.characterFilterIds, "characterFilterIds", "input",
+          "Comma-separated character IDs. Used when Character mode is include or exclude."),
       ));
       rightBodyEl.appendChild(rowOf(
         selectField("Tag mode", f.characterTagFilterMode, "characterTagFilterMode",
           ["any", "include", "exclude"]),
-        field("Character tags (comma-separated)", f.characterTagFilters, "characterTagFilters", "input"),
+        field("Character tags", f.characterTagFilters, "characterTagFilters", "input",
+          "Comma-separated character tags. Used when Tag mode is include or exclude."),
       ));
       rightBodyEl.appendChild(rowOf(
         selectField("Trigger mode", f.generationTriggerFilterMode, "generationTriggerFilterMode",
           ["any", "include", "exclude"]),
-        field("Generation triggers (e.g. chat, game)", f.generationTriggerFilters, "generationTriggerFilters", "input"),
+        field("Generation triggers", f.generationTriggerFilters, "generationTriggerFilters", "input",
+          "Comma-separated generation contexts to filter on, e.g. chat, game."),
       ));
 
       // ── Matching sources ─────────────────────────
@@ -1584,19 +1672,25 @@ function renderRight() {
       // ── Timing ───────────────────────────────────
       rightBodyEl.appendChild(sectionHeader("Timing"));
       rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Sticky (turns)", f.sticky, "sticky", { step: "1", min: 0 }),
-        nullableNumberField("Cooldown (turns)", f.cooldown, "cooldown", { step: "1", min: 0 }),
+        nullableNumberField("Sticky", f.sticky, "sticky", { step: "1", min: 0 },
+          "Keep this entry injected for N turns after it triggers, even if keywords stop matching."),
+        nullableNumberField("Cooldown", f.cooldown, "cooldown", { step: "1", min: 0 },
+          "Block this entry from triggering again for N turns after it was last injected."),
       ));
       rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Delay (turns)", f.delay, "delay", { step: "1", min: 0 }),
-        nullableNumberField("Ephemeral (turns)", f.ephemeral, "ephemeral", { step: "1", min: 0 }),
+        nullableNumberField("Delay", f.delay, "delay", { step: "1", min: 0 },
+          "Wait N turns after a keyword match before injecting this entry."),
+        nullableNumberField("Ephemeral", f.ephemeral, "ephemeral", { step: "1", min: 0 },
+          "Automatically remove this entry from context after N turns."),
       ));
 
       // ── Group & Tag ──────────────────────────────
       rightBodyEl.appendChild(sectionHeader("Group & Tag"));
       rightBodyEl.appendChild(rowOf(
-        field("Group", f.group, "group", "input"),
-        nullableNumberField("Group weight", f.groupWeight, "groupWeight", { step: "0.1" }),
+        field("Group", f.group, "group", "input",
+          "Group name for mutual-exclusion logic. Only one entry per group fires per turn."),
+        nullableNumberField("Group weight", f.groupWeight, "groupWeight", { step: "0.1" },
+          "Weighted probability for selection within a group. Higher = more likely to be chosen."),
       ));
       rightBodyEl.appendChild(rowOf(
         field("Tag", f.tag, "tag", "input"),
@@ -1606,10 +1700,13 @@ function renderRight() {
       // ── Advanced ─────────────────────────────────
       rightBodyEl.appendChild(sectionHeader("Advanced"));
       rightBodyEl.appendChild(rowOf(
-        checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion"),
-        checkboxField("Locked", f.locked, "locked"),
+        checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion",
+          "Stop this entry's content from being scanned for additional lorebook keyword matches."),
+        checkboxField("Locked", f.locked, "locked",
+          "Lock this entry to prevent it from being edited in the regular lorebook UI."),
       ));
       break;
+    }
 
     case "character":
       rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
@@ -1664,21 +1761,35 @@ function renderRight() {
   saveBtn.disabled = !editable || !state.isDirty;
   saveBtn.addEventListener("click", () => saveDraft());
   rightFooterEl.appendChild(saveBtn);
+  requestAnimationFrame(() => { rightBodyEl.scrollTop = savedScroll; });
 }
 
 // ── Field constructors ──────────────────────────────────
-function field(label, value, key, type) {
+function tipIcon(text) {
+  const s = document.createElement("span");
+  s.className = "kaio-tip";
+  s.dataset.tip = text;
+  s.textContent = "?";
+  return s;
+}
+function applyLabel(lab, label, tooltip) {
+  const txt = document.createElement("span");
+  txt.textContent = label;
+  lab.appendChild(txt);
+  if (tooltip) lab.appendChild(tipIcon(tooltip));
+}
+function field(label, value, key, type, tooltip, rows) {
   const wrap = document.createElement("div");
   wrap.className = "kaio-field";
   const lab = document.createElement("label");
   lab.className = "kaio-field-label";
-  lab.textContent = label;
+  applyLabel(lab, label, tooltip);
   wrap.appendChild(lab);
   let input;
   if (type === "textarea") {
     input = document.createElement("textarea");
     input.className = "kaio-textarea";
-    input.rows = 8;
+    input.rows = rows ?? 8;
   } else {
     input = document.createElement("input");
     input.className = "kaio-input";
@@ -1689,12 +1800,12 @@ function field(label, value, key, type) {
   wrap.appendChild(input);
   return wrap;
 }
-function numberField(label, value, key) {
+function numberField(label, value, key, tooltip) {
   const wrap = document.createElement("div");
   wrap.className = "kaio-field";
   const lab = document.createElement("label");
   lab.className = "kaio-field-label";
-  lab.textContent = label;
+  applyLabel(lab, label, tooltip);
   wrap.appendChild(lab);
   const input = document.createElement("input");
   input.className = "kaio-input";
@@ -1704,12 +1815,12 @@ function numberField(label, value, key) {
   wrap.appendChild(input);
   return wrap;
 }
-function nullableNumberField(label, value, key, attrs) {
+function nullableNumberField(label, value, key, attrs, tooltip) {
   const wrap = document.createElement("div");
   wrap.className = "kaio-field";
   const lab = document.createElement("label");
   lab.className = "kaio-field-label";
-  lab.textContent = label;
+  applyLabel(lab, label, tooltip);
   wrap.appendChild(lab);
   const input = document.createElement("input");
   input.className = "kaio-input";
@@ -1726,12 +1837,12 @@ function nullableNumberField(label, value, key, attrs) {
   wrap.appendChild(input);
   return wrap;
 }
-function selectField(label, value, key, options) {
+function selectField(label, value, key, options, tooltip) {
   const wrap = document.createElement("div");
   wrap.className = "kaio-field";
   const lab = document.createElement("label");
   lab.className = "kaio-field-label";
-  lab.textContent = label;
+  applyLabel(lab, label, tooltip);
   wrap.appendChild(lab);
   const sel = document.createElement("select");
   sel.className = "kaio-select";
@@ -1750,7 +1861,7 @@ function selectField(label, value, key, options) {
   wrap.appendChild(sel);
   return wrap;
 }
-function checkboxField(label, value, key) {
+function checkboxField(label, value, key, tooltip) {
   const wrap = document.createElement("label");
   wrap.className = "kaio-checkbox";
   const cb = document.createElement("input");
@@ -1761,6 +1872,33 @@ function checkboxField(label, value, key) {
   const txt = document.createElement("span");
   txt.textContent = label;
   wrap.appendChild(txt);
+  if (tooltip) wrap.appendChild(tipIcon(tooltip));
+  return wrap;
+}
+function matchingModeField(currentMode) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("div");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, "Matching mode", "Controls when this entry is injected. Normal: keyword-triggered. Selective: requires secondary key match. Constant: always injected regardless of keywords.");
+  wrap.appendChild(lab);
+  const row = document.createElement("div");
+  row.className = "kaio-match-mode";
+  for (const [mode, label] of [["normal","Normal"],["selective","Selective"],["constant","Constant"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kaio-match-btn";
+    btn.dataset.mode = mode;
+    btn.dataset.active = String(currentMode === mode);
+    const orb = document.createElement("span");
+    orb.className = "kaio-match-orb";
+    orb.dataset.mode = mode;
+    btn.appendChild(orb);
+    btn.appendChild(document.createTextNode(label));
+    btn.addEventListener("click", () => onFieldChange("matchingMode", mode));
+    row.appendChild(btn);
+  }
+  wrap.appendChild(row);
   return wrap;
 }
 function multiSelectField(label, value, key, options) {
@@ -2007,12 +2145,18 @@ function rowOf(...children) {
 }
 function onFieldChange(key, value) {
   if (!state.draft) return;
-  state.draft.fields[key] = value;
+  if (key === "matchingMode") {
+    state.draft.fields.constant = value === "constant";
+    state.draft.fields.selective = value === "selective";
+  } else {
+    state.draft.fields[key] = value;
+  }
   state.isDirty = isDraftDirty();
   // Section's injectionPosition toggles whether the Depth/Order row is
   // rendered, so re-render the whole inspector when it changes. Other fields
   // can patch the footer in place to preserve focus / caret.
-  if (state.draft.kind === "section" && key === "injectionPosition") {
+  if ((state.draft.kind === "section" && key === "injectionPosition") ||
+      key === "matchingMode") {
     renderRight();
     return;
   }
