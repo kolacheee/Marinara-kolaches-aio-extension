@@ -20,8 +20,6 @@ For preset sections, the editor only shows **Depth** and **Order** when **Positi
 
 ## Install
 
-> **Heads-up about Marinara's CSP.** Marinara Engine ships with a strict Content Security Policy of `script-src 'self'`. The engine's own extension loader runs your JS through `new Function(...)`, which `'unsafe-eval'` would normally allow — but the engine doesn't grant it. Until that is patched upstream, no JS-based Marinara extension will run, including this one. To enable it locally, edit `packages/server/src/middleware/security-headers.ts` (and the compiled `packages/server/dist/middleware/security-headers.js` if you're running a built install) so the `script-src` line reads `"script-src 'self' 'unsafe-eval',"`, restart the server, and you're good. The same fix unblocks every other JS extension you'd want to install.
-
 1. Grab `kolaches-aio.json` from the [Releases page](../../releases) (or this repo's root).
 2. In Marinara, click the gear icon in the top-right → **Extensions** tab → **Import Extension (.json, .css, or .js)**.
 3. Select `kolaches-aio.json`. The extension installs enabled by default.
