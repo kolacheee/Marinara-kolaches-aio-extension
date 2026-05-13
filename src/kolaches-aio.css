@@ -926,3 +926,84 @@
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color: #fed7aa;
 }
+
+/* ─── Mobile tab bar (hidden on desktop) ───── */
+.kaio-mobile-tabs {
+  display: none;
+}
+
+/* ─── Responsive: phones & small tablets ───── */
+@media (max-width: 768px) {
+  .kaio-shell {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    border: 0;
+  }
+
+  .kaio-mobile-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border, #27272a);
+    background: var(--card, #0f0f15);
+    flex: 0 0 auto;
+  }
+  .kaio-mobile-tab {
+    flex: 1;
+    padding: 0.5rem 0.25rem;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .kaio-mobile-tab:hover {
+    color: var(--foreground);
+  }
+  .kaio-mobile-tab[data-active="true"] {
+    color: var(--primary, #a78bfa);
+    border-bottom-color: var(--primary, #a78bfa);
+  }
+
+  .kaio-shell {
+    grid-template-rows: auto auto 1fr;
+  }
+
+  .kaio-body {
+    grid-template-columns: 1fr;
+  }
+
+  .kaio-col {
+    display: none;
+  }
+  .kaio-body[data-active-tab="left"]   .kaio-col[data-col="left"],
+  .kaio-body[data-active-tab="middle"] .kaio-col[data-col="middle"],
+  .kaio-body[data-active-tab="right"]  .kaio-col[data-col="right"] {
+    display: flex;
+  }
+
+  .kaio-col-left  { border-right: 0; }
+  .kaio-col-right { border-left: 0; }
+
+  .kaio-subtitle { display: none; }
+
+  /* Block head: allow wrapping so tag + name don't fight order/role */
+  .kaio-block-head {
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+  }
+  .kaio-block-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 0;
+  }
+  .kaio-block-role { display: none; }
+  .kaio-block-order { margin-left: auto; }
+}

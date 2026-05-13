@@ -2,6 +2,20 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.3.0] — 2026-05-13
+
+Mobile and tablet support — the extension is now usable on small screens without sacrificing anything on desktop.
+
+### Added
+
+- **Responsive mobile layout.** On screens ≤ 768px wide, the three-column layout collapses to a single panel with a **Sources / Prompt / Inspector** tab bar at the top. Tap a tab to switch panels. The tab bar is completely hidden on desktop — the existing side-by-side layout is unchanged.
+- **Auto-switch to Inspector on block tap.** When you tap a block in the Simulated Prompt panel on mobile, the view automatically switches to the Inspector tab so you can start editing immediately.
+
+### Changed
+
+- **Shell goes fullscreen on mobile.** The dialog drops its border-radius and expands to 100vw × 100vh, giving the most usable space on small screens. The subtitle ("Prompt Viewer & Editor") is hidden in the titlebar to save horizontal room.
+- **Block heads wrap gracefully on narrow screens.** The tag pill, block name, and order badge are allowed to wrap instead of squishing together. Block names truncate with ellipsis when space is tight. The role label (e.g. "system") is hidden on mobile since the same info is visible in the Inspector.
+
 ## [1.2.1] — 2026-05-08
 
 Inspector UX pass — less scrolling, better discoverability, and a matching-mode selector that mirrors the familiar SillyTavern/Marinara lorebook convention.

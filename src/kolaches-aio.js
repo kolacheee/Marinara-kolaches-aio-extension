@@ -187,15 +187,20 @@ function buildConsole() {
         <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
         <button class="kaio-iconbtn" data-action="close" title="Close (Esc)">✕</button>
       </div>
-      <div class="kaio-body">
-        <section class="kaio-col kaio-col-left">
+      <nav class="kaio-mobile-tabs" aria-label="Panel tabs">
+        <button class="kaio-mobile-tab" data-tab="left"   data-active="true">Sources</button>
+        <button class="kaio-mobile-tab" data-tab="middle">Prompt</button>
+        <button class="kaio-mobile-tab" data-tab="right">Inspector</button>
+      </nav>
+      <div class="kaio-body" data-active-tab="left">
+        <section class="kaio-col kaio-col-left" data-col="left">
           <header class="kaio-col-header">
             <h3>Sources</h3>
             <p>Pick one of each. Lorebook entries are added manually below.</p>
           </header>
           <div class="kaio-col-body" data-region="left"></div>
         </section>
-        <section class="kaio-col kaio-col-middle">
+        <section class="kaio-col kaio-col-middle" data-col="middle">
           <header class="kaio-col-header">
             <div class="kaio-col-header-row">
               <div class="kaio-col-header-text">
@@ -212,7 +217,7 @@ function buildConsole() {
           </header>
           <div class="kaio-col-body" data-region="middle"></div>
         </section>
-        <section class="kaio-col kaio-col-right">
+        <section class="kaio-col kaio-col-right" data-col="right">
           <header class="kaio-col-header">
             <h3>Inspector</h3>
             <p>Edits write back to the actual source.</p>
@@ -260,6 +265,18 @@ function buildConsole() {
     "click",
     runValidation,
   );
+
+  // Mobile tab switching
+  overlayEl.querySelector(".kaio-mobile-tabs").addEventListener("click", (e) => {
+    const tab = e.target.closest(".kaio-mobile-tab");
+    if (!tab) return;
+    const key = tab.dataset.tab;
+    const body = overlayEl.querySelector(".kaio-body");
+    body.dataset.activeTab = key;
+    for (const t of overlayEl.querySelectorAll(".kaio-mobile-tab")) {
+      t.dataset.active = t.dataset.tab === key ? "true" : "";
+    }
+  });
 
   // Esc closes (with dirty-state guard)
   document.addEventListener("keydown", onKeydown);
@@ -1410,6 +1427,18 @@ function blockEmptyHint(block) {
   }
 }
 
+// ── Mobile tab helper ────────────────────────────────────────
+function switchMobileTab(key) {
+  if (!overlayEl) return;
+  const mq = window.matchMedia("(max-width: 768px)");
+  if (!mq.matches) return;
+  const body = overlayEl.querySelector(".kaio-body");
+  if (body) body.dataset.activeTab = key;
+  for (const t of overlayEl.querySelectorAll(".kaio-mobile-tab")) {
+    t.dataset.active = t.dataset.tab === key ? "true" : "";
+  }
+}
+
 // ── Inspector / editor ────────────────────────────────────────
 function inspectBlock(block) {
   if (state.isDirty) {
@@ -1421,6 +1450,7 @@ function inspectBlock(block) {
   state.isDirty = false;
   renderMiddle();   // re-paint selection state
   renderRight();
+  switchMobileTab("right");
 }
 
 function makeDraft(block) {
