@@ -55,7 +55,7 @@ Marinara's extension loader executes the JS via `new Function("marinara", ext.js
 
 ## Compatibility
 
-Built against Marinara Engine v1.5.7. Endpoints used:
+Built against Marinara Engine v1.5.9. Endpoints used:
 
 - `GET  /api/prompts/`              (list presets)
 - `GET  /api/prompts/:id/full`      (preset + sections + groups)
