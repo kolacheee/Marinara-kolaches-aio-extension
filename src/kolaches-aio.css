@@ -294,6 +294,229 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.kaio-entry-folder-tag {
+  font-size: 0.5625rem;
+  opacity: 0.7;
+}
+
+/* ─── Folder items in entry checklist ─────────── */
+.kaio-lb-content {
+  margin-top: 0.5rem;
+}
+.kaio-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4375rem 0.5625rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  font-size: 0.6875rem;
+  user-select: none;
+}
+.kaio-folder-item:first-child {
+  border-top-left-radius: 0.5rem;
+  border-top-right-radius: 0.5rem;
+}
+.kaio-folder-item:hover { background: var(--accent, #25252e); }
+.kaio-folder-item input[type="checkbox"] {
+  accent-color: var(--primary, #a78bfa);
+  cursor: pointer;
+}
+.kaio-folder-icon {
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.kaio-folder-name {
+  font-weight: 600;
+  color: var(--foreground);
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+.kaio-folder-count {
+  font-size: 0.5625rem;
+  color: var(--muted-foreground);
+  background: rgba(148, 163, 184, 0.15);
+  padding: 0 0.3125rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.kaio-folder-edit-btn {
+  background: transparent;
+  border: 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0.0625rem 0.1875rem;
+  font-size: 0.75rem;
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+  transition: color 0.15s;
+  line-height: 1;
+}
+.kaio-folder-edit-btn:hover {
+  color: var(--primary, #a78bfa);
+}
+.kaio-entrylist-divider {
+  height: 0;
+  border: 0;
+  border-top: 1px dashed var(--border, #27272a);
+  opacity: 0.6;
+}
+
+/* ─── Create buttons (+ Folder / + Entry) ────── */
+.kaio-create-actions {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+.kaio-create-btn {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--secondary, #1c1c25);
+  color: var(--muted-foreground);
+  border: 1px dashed var(--border, #27272a);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.kaio-create-btn:hover {
+  color: var(--primary, #a78bfa);
+  border-color: var(--primary, #a78bfa);
+  background: var(--accent, #25252e);
+}
+
+/* ─── Folder entries list (inspector) ─────────── */
+.kaio-folder-entries {
+  margin-top: 0.375rem;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--secondary, #1c1c25);
+}
+.kaio-folder-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  font-size: 0.6875rem;
+}
+.kaio-folder-entry-row:last-child { border-bottom: 0; }
+.kaio-folder-entry-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.kaio-folder-entry-remove {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.625rem;
+  font-family: inherit;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  transition: all 0.15s;
+}
+.kaio-folder-entry-remove:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+/* ─── Batch-add entries to folder (inspector) ─── */
+.kaio-batch-toggle {
+  margin-bottom: 0.375rem;
+  font-size: 0.6875rem;
+}
+.kaio-batch-list {
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--secondary, #1c1c25);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.kaio-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.5rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  user-select: none;
+}
+.kaio-batch-item:last-child { border-bottom: 0; }
+.kaio-batch-item:hover { background: var(--accent, #25252e); }
+.kaio-batch-item input[type="checkbox"] {
+  accent-color: var(--primary, #a78bfa);
+  flex-shrink: 0;
+}
+.kaio-batch-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.kaio-batch-nested {
+  opacity: 0.45;
+  cursor: default;
+}
+.kaio-batch-nested:hover { background: transparent; }
+.kaio-batch-nested-name {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.kaio-batch-nested-folder {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.5625rem;
+  color: var(--muted-foreground);
+  text-align: right;
+}
+.kaio-batch-empty {
+  padding: 0.5rem;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  font-style: italic;
+}
+.kaio-batch-add-btn {
+  margin-top: 0.375rem;
+  width: 100%;
+  font-size: 0.6875rem;
+}
+
+/* ─── Delete & Danger buttons ────────────────── */
+.kaio-btn-delete {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted-foreground);
+}
+.kaio-btn-delete:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+.kaio-btn-danger {
+  background: #dc2626;
+  color: #fff;
+  border-color: transparent;
+  font-weight: 600;
+}
+.kaio-btn-danger:hover { background: #ef4444; }
 
 /* ─── Middle: simulated prompt ──────────────── */
 .kaio-middle-empty {

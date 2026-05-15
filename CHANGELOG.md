@@ -2,6 +2,24 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.4.0] — 2026-05-15
+
+Lorebook folder support — folders are now first-class objects in the extension, with full CRUD, batch entry assignment, and integrated selection logic.
+
+### Added
+
+- **Folder rows in Sources.** Each lorebook's entry checklist now shows folders at the top, separated by a divider. Each folder row has a checkbox, 📁 icon, name, nested-entry count badge, and a ✏️ pencil button to open the folder in the Inspector.
+- **Folder selection cascades to entries.** Checking a folder automatically selects all entries nested inside it (and populates them into the Simulated Prompt). Unchecking deselects them. If an entry is added to or removed from a selected folder, its selection state updates automatically.
+- **Create Folder / Create Entry buttons.** A `+ Folder` and `+ Entry` button appear beneath each selected lorebook's checklist. Creating either opens the new item in the Inspector immediately, ready for editing.
+- **Folder Inspector.** Clicking a folder's ✏️ button opens it in the Inspector with editable Name, Enabled, and Order fields, a list of currently nested entries (each with a Remove button to unassign), and a batch-add section.
+- **Batch add entries to folders.** The folder Inspector includes a checklist of unassigned entries. An "Add selected (N)" button PATCHes all checked entries into the folder in one action. A "Show already nested" toggle reveals entries assigned to other folders — displayed grayed-out and unselectable, with the owning folder's name shown on the right (folder name takes visual precedence over entry name when space is tight).
+- **Delete button in Inspector.** A Delete button now appears in the Inspector footer (to the left of Revert) for lorebook entries and folders. Deleting shows a confirmation dialog; for folders, the dialog notes that nested entries will be moved to root level.
+- **Folder dropdown for entries.** The entry Inspector's Folder field is now a dropdown populated from the lorebook's folders, replacing the old free-text input.
+
+### Changed
+
+- **Mobile: folder deletion returns to Sources.** After deleting a folder on mobile, the view automatically switches back to the Sources tab instead of leaving the user on an empty Inspector.
+
 ## [1.3.0] — 2026-05-13
 
 Mobile and tablet support — the extension is now usable on small screens without sacrificing anything on desktop.

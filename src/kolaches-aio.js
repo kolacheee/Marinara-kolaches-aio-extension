@@ -64,6 +64,8 @@ const state = {
 
   presetFull: null,              // {preset, sections, groups, choiceBlocks}
   lorebookEntries: {},           // lorebookId → entries[]
+  lorebookFolders: {},           // lorebookId → folders[]
+  selectedFolderIdsByLorebook: {}, // {lorebookId → Set<folderId>}
   characterFull: null,           // full character (with .data)
   personaFull: null,
 
@@ -85,6 +87,9 @@ const state = {
   // the Validate button in the middle column header.
   validationErrors: {},
   validationRanLast: false,      // true once Validate has run at least once
+
+  // Folder batch-add UI state (reset on inspect switch)
+  folderBatchAdd: { showNested: false, selected: new Set() },
 };
 
 // ── DOM refs (populated by buildConsole) ──────────────────────
@@ -252,6 +257,7 @@ function buildConsole() {
     if (state.selectedPresetId) await loadPresetFull(state.selectedPresetId);
     for (const lbId of state.selectedLorebookIds) {
       await loadLorebookEntries(lbId);
+      await loadLorebookFolders(lbId);
     }
     if (state.selectedCharacterId) await loadCharacter(state.selectedCharacterId);
     if (state.selectedPersonaId) await loadPersona(state.selectedPersonaId);
@@ -336,6 +342,12 @@ async function loadLorebookEntries(id) {
     console.error(e); showToast("Couldn't load entries", "error"); return [];
   });
   state.lorebookEntries[id] = Array.isArray(list) ? list : [];
+}
+async function loadLorebookFolders(id) {
+  const list = await api("GET", "/lorebooks/" + id + "/folders").catch((e) => {
+    console.error(e); return [];
+  });
+  state.lorebookFolders[id] = Array.isArray(list) ? list : [];
 }
 async function loadCharacter(id) {
   const c = await api("GET", "/characters/" + id).catch((e) => {
@@ -453,10 +465,13 @@ function renderLeft() {
         }
         state.activeLorebookId = newId;
         if (!state.lorebookEntries[newId]) await loadLorebookEntries(newId);
+        if (!state.lorebookFolders[newId]) await loadLorebookFolders(newId);
       } else if (!newId) {
         // Removing this lorebook from the selection
         state.selectedLorebookIds = state.selectedLorebookIds.filter((id) => id !== currentId);
         delete state.selectedEntryIdsByLorebook[currentId];
+        delete state.lorebookFolders[currentId];
+        delete state.selectedFolderIdsByLorebook[currentId];
         if (state.activeLorebookId === currentId) {
           state.activeLorebookId = state.selectedLorebookIds[state.selectedLorebookIds.length - 1] || null;
         }
@@ -476,8 +491,11 @@ function renderLeft() {
           state.selectedEntryIdsByLorebook[newId] = new Set();
         }
         delete state.selectedEntryIdsByLorebook[currentId];
+        delete state.lorebookFolders[currentId];
+        delete state.selectedFolderIdsByLorebook[currentId];
         state.activeLorebookId = newId;
         if (!state.lorebookEntries[newId]) await loadLorebookEntries(newId);
+        if (!state.lorebookFolders[newId]) await loadLorebookFolders(newId);
       }
       renderAll();
     });
@@ -561,30 +579,117 @@ function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange
 }
 
 function renderEntryChecklist(lorebookId) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-lb-content";
+
   const list = document.createElement("div");
   list.className = "kaio-entrylist";
   const entries = state.lorebookEntries[lorebookId] || [];
-  if (!entries.length) {
+  const folders = state.lorebookFolders[lorebookId] || [];
+
+  if (!entries.length && !folders.length) {
     list.innerHTML = '<div class="kaio-entrylist-empty">No entries in this lorebook.</div>';
-    return list;
+    wrap.appendChild(list);
+    wrap.appendChild(renderCreateActions(lorebookId));
+    return wrap;
   }
+
   if (!state.selectedEntryIdsByLorebook[lorebookId]) {
     state.selectedEntryIdsByLorebook[lorebookId] = new Set();
   }
+  if (!state.selectedFolderIdsByLorebook[lorebookId]) {
+    state.selectedFolderIdsByLorebook[lorebookId] = new Set();
+  }
   const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
+  const folderSet = state.selectedFolderIdsByLorebook[lorebookId];
 
-  // Sort by order asc for display
+  // ── Folders at the top ────────────────────────
+  const sortedFolders = [...folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  for (const folder of sortedFolders) {
+    const folderEntries = entries.filter((e) => e.folderId === folder.id);
+    const isChecked = folderSet.has(folder.id);
+
+    const item = document.createElement("div");
+    item.className = "kaio-folder-item";
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = isChecked;
+    cb.addEventListener("change", async (ev) => {
+      if (await guardDirty() === false) {
+        ev.target.checked = !ev.target.checked;
+        return;
+      }
+      if (cb.checked) {
+        folderSet.add(folder.id);
+        for (const e of folderEntries) checkedSet.add(e.id);
+      } else {
+        folderSet.delete(folder.id);
+        for (const e of folderEntries) checkedSet.delete(e.id);
+      }
+      renderLeft();
+      renderMiddle();
+    });
+    item.appendChild(cb);
+
+    const icon = document.createElement("span");
+    icon.className = "kaio-folder-icon";
+    icon.textContent = "📁";
+    item.appendChild(icon);
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "kaio-folder-name";
+    nameEl.textContent = folder.name || "(unnamed folder)";
+    item.appendChild(nameEl);
+
+    const count = document.createElement("span");
+    count.className = "kaio-folder-count";
+    count.textContent = String(folderEntries.length);
+    item.appendChild(count);
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "kaio-folder-edit-btn";
+    editBtn.innerHTML = "✏️";
+    editBtn.title = "Edit folder";
+    editBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      inspectBlock({
+        kind: "folder",
+        id: "folder-" + folder.id,
+        folder: folder,
+        lorebookId: lorebookId,
+      });
+    });
+    item.appendChild(editBtn);
+
+    list.appendChild(item);
+  }
+
+  // Divider between folders and entries
+  if (sortedFolders.length && entries.length) {
+    const divider = document.createElement("div");
+    divider.className = "kaio-entrylist-divider";
+    list.appendChild(divider);
+  }
+
+  // ── Entries ───────────────────────────────────
   const sorted = [...entries].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   for (const e of sorted) {
     const item = document.createElement("label");
     item.className = "kaio-entry-item";
     const checked = checkedSet.has(e.id);
     const positionLabel = positionToLabel(e.position);
+    const folder = e.folderId ? folders.find((f) => f.id === e.folderId) : null;
+    const folderTag = folder
+      ? `<span class="kaio-entry-folder-tag" title="In folder: ${escapeHTML(folder.name || "")}">📁</span>`
+      : "";
     item.innerHTML = `
       <input type="checkbox" ${checked ? "checked" : ""}>
       <div style="flex:1;min-width:0;">
         <div class="kaio-entry-name">${escapeHTML(e.name || "(unnamed)")}</div>
         <div class="kaio-entry-meta">
+          ${folderTag}
           <span class="kaio-entry-position">${positionLabel}</span>
           <span>order ${e.order ?? 0}</span>
           ${e.position === 2 ? `<span>depth ${e.depth ?? 0}</span>` : ""}
@@ -594,17 +699,97 @@ function renderEntryChecklist(lorebookId) {
     `;
     item.querySelector("input").addEventListener("change", async (ev) => {
       if (await guardDirty() === false) {
-        ev.target.checked = !ev.target.checked; // undo
+        ev.target.checked = !ev.target.checked;
         return;
       }
       if (ev.target.checked) checkedSet.add(e.id);
-      else checkedSet.delete(e.id);
-      // Re-render middle so the entry shows/hides in the simulation
+      else {
+        checkedSet.delete(e.id);
+        if (e.folderId && folderSet.has(e.folderId)) {
+          folderSet.delete(e.folderId);
+          renderLeft();
+        }
+      }
       renderMiddle();
     });
     list.appendChild(item);
   }
-  return list;
+
+  wrap.appendChild(list);
+  wrap.appendChild(renderCreateActions(lorebookId));
+  return wrap;
+}
+
+function renderCreateActions(lorebookId) {
+  const actions = document.createElement("div");
+  actions.className = "kaio-create-actions";
+
+  const folderBtn = document.createElement("button");
+  folderBtn.type = "button";
+  folderBtn.className = "kaio-create-btn";
+  folderBtn.textContent = "+ Folder";
+  folderBtn.addEventListener("click", () => createFolder(lorebookId));
+  actions.appendChild(folderBtn);
+
+  const entryBtn = document.createElement("button");
+  entryBtn.type = "button";
+  entryBtn.className = "kaio-create-btn";
+  entryBtn.textContent = "+ Entry";
+  entryBtn.addEventListener("click", () => createEntry(lorebookId));
+  actions.appendChild(entryBtn);
+
+  return actions;
+}
+
+async function createFolder(lorebookId) {
+  if (await guardDirty() === false) return;
+  try {
+    const folder = await api("POST", "/lorebooks/" + lorebookId + "/folders", { name: "New Folder" });
+    await loadLorebookFolders(lorebookId);
+    if (folder && folder.id) {
+      const fresh = (state.lorebookFolders[lorebookId] || []).find((f) => f.id === folder.id) || folder;
+      inspectBlock({ kind: "folder", id: "folder-" + fresh.id, folder: fresh, lorebookId });
+    }
+    renderLeft();
+    showToast("Folder created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create folder failed", err);
+    showToast("Failed to create folder", "error");
+  }
+}
+
+async function createEntry(lorebookId) {
+  if (await guardDirty() === false) return;
+  try {
+    const entry = await api("POST", "/lorebooks/" + lorebookId + "/entries", { name: "New Entry" });
+    await loadLorebookEntries(lorebookId);
+    if (entry && entry.id) {
+      if (!state.selectedEntryIdsByLorebook[lorebookId]) {
+        state.selectedEntryIdsByLorebook[lorebookId] = new Set();
+      }
+      state.selectedEntryIdsByLorebook[lorebookId].add(entry.id);
+      const fresh = (state.lorebookEntries[lorebookId] || []).find((e) => e.id === entry.id) || entry;
+      inspectBlock({ kind: "lorebook-entry", id: "entry-" + fresh.id, section: null, entry: fresh });
+    }
+    renderAll();
+    showToast("Entry created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create entry failed", err);
+    showToast("Failed to create entry", "error");
+  }
+}
+
+function syncFolderSelections(lorebookId) {
+  const folderSet = state.selectedFolderIdsByLorebook[lorebookId];
+  if (!folderSet || !folderSet.size) return;
+  const entries = state.lorebookEntries[lorebookId] || [];
+  const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
+  if (!checkedSet) return;
+  for (const e of entries) {
+    if (e.folderId && folderSet.has(e.folderId)) {
+      checkedSet.add(e.id);
+    }
+  }
 }
 
 function positionToLabel(position) {
@@ -1448,6 +1633,7 @@ function inspectBlock(block) {
   state.inspecting = block;
   state.draft = makeDraft(block);
   state.isDirty = false;
+  state.folderBatchAdd = { showNested: false, selected: new Set() };
   renderMiddle();   // re-paint selection state
   renderRight();
   switchMobileTab("right");
@@ -1557,6 +1743,17 @@ function makeDraft(block) {
           },
         };
       }
+    case "folder":
+      return {
+        kind: "folder",
+        sourceId: block.folder.id,
+        lorebookId: block.lorebookId,
+        fields: {
+          name: block.folder.name || "",
+          enabled: block.folder.enabled !== false,
+          order: block.folder.order ?? 0,
+        },
+      };
     default:
       return null;
   }
@@ -1724,7 +1921,7 @@ function renderRight() {
       ));
       rightBodyEl.appendChild(rowOf(
         field("Tag", f.tag, "tag", "input"),
-        field("Folder ID", f.folderId, "folderId", "input"),
+        folderSelectField(d.lorebookId, f.folderId),
       ));
 
       // ── Advanced ─────────────────────────────────
@@ -1754,6 +1951,17 @@ function renderRight() {
       rightBodyEl.appendChild(field("Personality", f.personality, "personality", "textarea"));
       rightBodyEl.appendChild(field("Scenario", f.scenario, "scenario", "textarea"));
       break;
+
+    case "folder":
+      rightBodyEl.appendChild(sectionHeader("Basic"));
+      rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
+      rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled",
+        "When disabled, all entries in this folder are excluded from activation regardless of their individual enabled state."));
+      rightBodyEl.appendChild(numberField("Order", f.order, "order",
+        "Display order among folders. Lower values appear first."));
+      rightBodyEl.appendChild(renderFolderEntries(d.sourceId, d.lorebookId));
+      rightBodyEl.appendChild(renderFolderBatchAdd(d.sourceId, d.lorebookId));
+      break;
   }
 
   // Footer with Save/Revert
@@ -1772,6 +1980,15 @@ function renderRight() {
   const spacer = document.createElement("span");
   spacer.className = "kaio-spacer";
   rightFooterEl.appendChild(spacer);
+
+  if (d.kind === "lorebook-entry" || d.kind === "folder") {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "kaio-btn kaio-btn-delete";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.title = "Permanently delete this " + (d.kind === "folder" ? "folder" : "entry");
+    deleteBtn.addEventListener("click", () => deleteInspected());
+    rightFooterEl.appendChild(deleteBtn);
+  }
 
   const revertBtn = document.createElement("button");
   revertBtn.className = "kaio-btn";
@@ -2161,6 +2378,189 @@ async function saveVariableOption(cb) {
   }
 }
 
+function folderSelectField(lorebookId, currentValue) {
+  const folders = state.lorebookFolders[lorebookId] || [];
+  const options = [["", "(none)"], ...folders.map((f) => [f.id, f.name || "(unnamed folder)"])];
+  return selectField("Folder", currentValue || "", "folderId", options);
+}
+
+function renderFolderEntries(folderId, lorebookId) {
+  const wrap = document.createElement("div");
+  const entries = (state.lorebookEntries[lorebookId] || []).filter((e) => e.folderId === folderId);
+  wrap.appendChild(sectionHeader("Entries in this folder"));
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "kaio-field-help";
+    empty.textContent = "No entries assigned to this folder.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  const list = document.createElement("div");
+  list.className = "kaio-folder-entries";
+  for (const e of entries) {
+    const row = document.createElement("div");
+    row.className = "kaio-folder-entry-row";
+    const nameEl = document.createElement("span");
+    nameEl.className = "kaio-folder-entry-name";
+    nameEl.textContent = e.name || "(unnamed)";
+    row.appendChild(nameEl);
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "kaio-folder-entry-remove";
+    removeBtn.textContent = "Remove";
+    removeBtn.title = "Unassign entry from this folder";
+    removeBtn.addEventListener("click", async () => {
+      try {
+        await api("PATCH", "/lorebooks/" + lorebookId + "/entries/" + e.id, { folderId: null });
+        await loadLorebookEntries(lorebookId);
+        const folderSet = state.selectedFolderIdsByLorebook[lorebookId];
+        if (folderSet && folderSet.has(folderId)) {
+          const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
+          if (checkedSet) checkedSet.delete(e.id);
+        }
+        renderAll();
+        showToast("Entry removed from folder", "info");
+      } catch (err) {
+        console.error("[kolache-AIO] Remove from folder failed", err);
+        showToast("Failed to remove entry", "error");
+      }
+    });
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function renderFolderBatchAdd(folderId, lorebookId) {
+  const wrap = document.createElement("div");
+  wrap.appendChild(sectionHeader("Add entries to this folder"));
+
+  const entries = state.lorebookEntries[lorebookId] || [];
+  const folders = state.lorebookFolders[lorebookId] || [];
+  const available = entries.filter((e) => !e.folderId);
+  const nested = entries.filter((e) => e.folderId && e.folderId !== folderId);
+  const inThisFolder = entries.filter((e) => e.folderId === folderId);
+
+  if (!available.length && !nested.length) {
+    const msg = document.createElement("div");
+    msg.className = "kaio-field-help";
+    msg.textContent = inThisFolder.length
+      ? "All entries are already in this folder."
+      : "This lorebook has no entries yet.";
+    wrap.appendChild(msg);
+    return wrap;
+  }
+
+  // "Show already nested" toggle
+  if (nested.length) {
+    const toggleWrap = document.createElement("label");
+    toggleWrap.className = "kaio-checkbox kaio-batch-toggle";
+    const toggleCb = document.createElement("input");
+    toggleCb.type = "checkbox";
+    toggleCb.checked = state.folderBatchAdd.showNested;
+    toggleCb.addEventListener("change", () => {
+      state.folderBatchAdd.showNested = toggleCb.checked;
+      renderRight();
+    });
+    toggleWrap.appendChild(toggleCb);
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "Show already nested";
+    toggleWrap.appendChild(toggleText);
+    wrap.appendChild(toggleWrap);
+  }
+
+  const listEl = document.createElement("div");
+  listEl.className = "kaio-batch-list";
+
+  // Available (unassigned) entries — selectable
+  for (const e of available) {
+    const row = document.createElement("label");
+    row.className = "kaio-batch-item";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = state.folderBatchAdd.selected.has(e.id);
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.folderBatchAdd.selected.add(e.id);
+      else state.folderBatchAdd.selected.delete(e.id);
+      const btn = wrap.querySelector(".kaio-batch-add-btn");
+      if (btn) {
+        const n = state.folderBatchAdd.selected.size;
+        btn.textContent = n ? "Add selected (" + n + ")" : "Add selected";
+        btn.disabled = !n;
+      }
+    });
+    row.appendChild(cb);
+    const nameEl = document.createElement("span");
+    nameEl.className = "kaio-batch-item-name";
+    nameEl.textContent = e.name || "(unnamed)";
+    row.appendChild(nameEl);
+    listEl.appendChild(row);
+  }
+
+  // Already-nested entries — grayed out, unselectable, folder name on right
+  if (state.folderBatchAdd.showNested) {
+    for (const e of nested) {
+      const ownerFolder = folders.find((f) => f.id === e.folderId);
+      const row = document.createElement("div");
+      row.className = "kaio-batch-item kaio-batch-nested";
+      const dummyCb = document.createElement("input");
+      dummyCb.type = "checkbox";
+      dummyCb.disabled = true;
+      row.appendChild(dummyCb);
+      const nameEl = document.createElement("span");
+      nameEl.className = "kaio-batch-item-name kaio-batch-nested-name";
+      nameEl.textContent = e.name || "(unnamed)";
+      row.appendChild(nameEl);
+      const folderLabel = document.createElement("span");
+      folderLabel.className = "kaio-batch-nested-folder";
+      folderLabel.textContent = ownerFolder ? ownerFolder.name : "(unknown)";
+      row.appendChild(folderLabel);
+      listEl.appendChild(row);
+    }
+  }
+
+  if (!available.length) {
+    const msg = document.createElement("div");
+    msg.className = "kaio-batch-empty";
+    msg.textContent = "No unassigned entries available.";
+    listEl.appendChild(msg);
+  }
+
+  wrap.appendChild(listEl);
+
+  // "Add selected" button
+  const n = state.folderBatchAdd.selected.size;
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "kaio-btn kaio-btn-primary kaio-batch-add-btn";
+  addBtn.textContent = n ? "Add selected (" + n + ")" : "Add selected";
+  addBtn.disabled = !n;
+  addBtn.addEventListener("click", async () => {
+    const ids = [...state.folderBatchAdd.selected];
+    if (!ids.length) return;
+    try {
+      await Promise.all(ids.map((id) =>
+        api("PATCH", "/lorebooks/" + lorebookId + "/entries/" + id, { folderId: folderId })
+      ));
+      await loadLorebookEntries(lorebookId);
+      const folderSelectSet = state.selectedFolderIdsByLorebook[lorebookId];
+      if (folderSelectSet && folderSelectSet.has(folderId)) {
+        const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
+        if (checkedSet) for (const id of ids) checkedSet.add(id);
+      }
+      state.folderBatchAdd.selected.clear();
+      renderAll();
+      showToast("Added " + ids.length + " entr" + (ids.length === 1 ? "y" : "ies") + " to folder", "success");
+    } catch (err) {
+      console.error("[kolache-AIO] Batch add failed", err);
+      showToast("Failed to add entries", "error");
+    }
+  });
+  wrap.appendChild(addBtn);
+  return wrap;
+}
+
 function sectionHeader(text) {
   const h = document.createElement("div");
   h.className = "kaio-section-header";
@@ -2194,9 +2594,9 @@ function onFieldChange(key, value) {
   if (dot) dot.dataset.dirty = state.isDirty ? "true" : "false";
   const txt = rightFooterEl.querySelector("span:nth-child(2)");
   if (txt) txt.textContent = state.isDirty ? "Unsaved changes" : "No changes";
-  const buttons = rightFooterEl.querySelectorAll("button");
-  if (buttons[0]) buttons[0].disabled = !state.isDirty;
-  if (buttons[1]) buttons[1].disabled = !state.isDirty;
+  const footerBtns = rightFooterEl.querySelectorAll("button:not(.kaio-btn-delete)");
+  if (footerBtns[0]) footerBtns[0].disabled = !state.isDirty;
+  if (footerBtns[1]) footerBtns[1].disabled = !state.isDirty;
 }
 function isDraftDirty() {
   if (!state.draft || !state.inspecting) return false;
@@ -2242,6 +2642,7 @@ async function saveDraft() {
       case "lorebook-entry": {
         const f = d.fields;
         const csv = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
+        const oldFolderId = state.inspecting?.entry?.folderId || null;
         const body = {
           name: f.name, content: f.content, description: f.description,
           keys: csv(f.keys), secondaryKeys: csv(f.secondaryKeys),
@@ -2266,6 +2667,17 @@ async function saveDraft() {
         };
         await api("PATCH", "/lorebooks/" + d.lorebookId + "/entries/" + d.sourceId, body);
         await loadLorebookEntries(d.lorebookId);
+        // Sync folder selection: auto-select/deselect entry if it moved between folders
+        const folderSet = state.selectedFolderIdsByLorebook[d.lorebookId];
+        const checkedSet = state.selectedEntryIdsByLorebook[d.lorebookId];
+        if (folderSet && checkedSet) {
+          const saved = (state.lorebookEntries[d.lorebookId] || []).find((e) => e.id === d.sourceId);
+          if (saved) {
+            const newFolderId = saved.folderId || null;
+            if (newFolderId && folderSet.has(newFolderId)) checkedSet.add(saved.id);
+            if (oldFolderId && folderSet.has(oldFolderId) && oldFolderId !== newFolderId) checkedSet.delete(saved.id);
+          }
+        }
         break;
       }
       case "character": {
@@ -2280,6 +2692,23 @@ async function saveDraft() {
         await loadPersona(d.sourceId);
         break;
       }
+      case "folder": {
+        const body = { name: d.fields.name, enabled: d.fields.enabled, order: Number(d.fields.order) };
+        await api("PATCH", "/lorebooks/" + d.lorebookId + "/folders/" + d.sourceId, body);
+        await loadLorebookFolders(d.lorebookId);
+        const freshFolder = (state.lorebookFolders[d.lorebookId] || []).find((f) => f.id === d.sourceId);
+        if (freshFolder) {
+          state.inspecting = { kind: "folder", id: "folder-" + freshFolder.id, folder: freshFolder, lorebookId: d.lorebookId };
+          state.draft = makeDraft(state.inspecting);
+        } else {
+          state.inspecting = null;
+          state.draft = null;
+        }
+        state.isDirty = false;
+        renderAll();
+        showToast("Saved ✓", "success");
+        return;
+      }
     }
     const previousId = state.inspecting?.id;
     const blocks = buildSimulatedPrompt();
@@ -2293,6 +2722,53 @@ async function saveDraft() {
     console.error("[kolache-AIO] Save failed", err);
     showToast("Save failed — see console", "error");
   }
+}
+async function deleteInspected() {
+  if (!state.inspecting) return;
+  const kind = state.inspecting.kind;
+  if (kind !== "lorebook-entry" && kind !== "folder") return;
+  const confirmed = await showDeleteConfirm(kind);
+  if (!confirmed) return;
+  try {
+    if (kind === "lorebook-entry") {
+      const entry = state.inspecting.entry;
+      const lorebookId = entry.lorebookId;
+      await api("DELETE", "/lorebooks/" + lorebookId + "/entries/" + entry.id);
+      await loadLorebookEntries(lorebookId);
+      const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
+      if (checkedSet) checkedSet.delete(entry.id);
+    } else if (kind === "folder") {
+      const folder = state.inspecting.folder;
+      const lorebookId = state.inspecting.lorebookId;
+      await api("DELETE", "/lorebooks/" + lorebookId + "/folders/" + folder.id);
+      await loadLorebookFolders(lorebookId);
+      await loadLorebookEntries(lorebookId);
+      const folderSet = state.selectedFolderIdsByLorebook[lorebookId];
+      if (folderSet) folderSet.delete(folder.id);
+    }
+    state.inspecting = null;
+    state.draft = null;
+    state.isDirty = false;
+    renderAll();
+    if (kind === "folder") switchMobileTab("left");
+    showToast(kind === "folder" ? "Folder deleted" : "Entry deleted", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Delete failed", err);
+    showToast("Delete failed — see console", "error");
+  }
+}
+function showDeleteConfirm(kind) {
+  return new Promise((resolve) => {
+    const label = kind === "folder" ? "folder" : "entry";
+    const extra = kind === "folder" ? " Entries inside will be moved to root level." : "";
+    const bg = document.createElement("div");
+    bg.className = "kaio-confirm-bg";
+    bg.innerHTML = '<div class="kaio-confirm"><div class="kaio-confirm-title">Delete ' + label + '?</div><div class="kaio-confirm-msg">This will permanently delete this ' + label + '.' + extra + ' This cannot be undone.</div><div class="kaio-confirm-actions"><button class="kaio-btn kaio-btn-ghost" data-act="cancel">Cancel</button><button class="kaio-btn kaio-btn-danger" data-act="delete">Delete</button></div></div>';
+    overlayEl.querySelector(".kaio-shell").appendChild(bg);
+    const close = () => bg.remove();
+    bg.querySelector('[data-act="cancel"]').addEventListener("click", () => { close(); resolve(false); });
+    bg.querySelector('[data-act="delete"]').addEventListener("click", () => { close(); resolve(true); });
+  });
 }
 function confirmDirtySwitch(pending) {
   const bg = document.createElement("div");
