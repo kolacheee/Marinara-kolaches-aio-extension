@@ -90,6 +90,13 @@ const state = {
 
   // Folder batch-add UI state (reset on inspect switch)
   folderBatchAdd: { showNested: false, selected: new Set() },
+
+  // Collapsible states for inspector sections
+  presetEditorCollapsed: { overview: false, sections: false, variables: false },
+  lbInspectorCollapsed: { basic: false, matching: true, contextFilters: true, matchingSources: true, timing: true, groupTag: true, advanced: true },
+  presetGroupBatchAdd: { groupId: null, selected: new Set() },
+  // Which variable is expanded in the preset variables panel (null = none)
+  presetExpandedVariableId: null,
 };
 
 // ── DOM refs (populated by buildConsole) ──────────────────────
@@ -174,6 +181,30 @@ function injectTopbarButton() {
   btn.addEventListener("click", () => openConsole());
   nav.insertBefore(btn, nav.firstChild);
   return true;
+}
+
+// ── Extension-card 🥞 button (injected into Settings → Extensions) ──
+function tryInjectExtensionLauncher() {
+  if (document.querySelector(".kaio-ext-launcher")) return;
+  const nameSpans = document.querySelectorAll(".truncate.font-medium");
+  for (const span of nameSpans) {
+    if (!span.textContent || !span.textContent.includes("kolache")) continue;
+    if (span.closest(".kaio-overlay")) continue;
+    const card = span.closest(".rounded-lg");
+    if (!card) continue;
+    const btn = document.createElement("button");
+    btn.className = "kaio-ext-launcher";
+    btn.title = "Open kolache's AIO Console";
+    btn.innerHTML = "🥞";
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openConsole();
+    });
+    const trashBtn = card.querySelector('[title="Remove extension"]');
+    if (trashBtn) card.insertBefore(btn, trashBtn);
+    else card.appendChild(btn);
+    return;
+  }
 }
 
 // ── Console build (one-time) ──────────────────────────────────
@@ -373,7 +404,7 @@ function renderLeft() {
   if (!leftBodyEl) return;
   leftBodyEl.innerHTML = "";
 
-  leftBodyEl.appendChild(renderSourcePicker({
+  const presetPicker = renderSourcePicker({
     label: "Preset",
     icon: "📜",
     items: state.presets,
@@ -391,7 +422,27 @@ function renderLeft() {
       if (id) await loadPresetFull(id);
       renderAll();
     },
-  }));
+  });
+  if (state.selectedPresetId && state.presetFull) {
+    const sel = presetPicker.querySelector(".kaio-select");
+    if (sel) {
+      const row = document.createElement("div");
+      row.className = "kaio-source-select-row";
+      sel.parentNode.insertBefore(row, sel);
+      row.appendChild(sel);
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "kaio-folder-edit-btn";
+      editBtn.innerHTML = "✏️";
+      editBtn.title = "Edit preset properties";
+      editBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        inspectBlock({ kind: "preset-editor", id: "preset-editor" });
+      });
+      row.appendChild(editBtn);
+    }
+  }
+  leftBodyEl.appendChild(presetPicker);
 
   // Multi-lorebook: one row per selected lorebook + one trailing "add" row.
   // Only the active (most-recently-tapped) lorebook shows its entry checklist.
@@ -1314,7 +1365,7 @@ function computeEntryOverlaps(blocks) {
 function renderBlock(block, overlaps) {
   const el = document.createElement("div");
   el.className = "kaio-block";
-  const isReadonly = block.kind === "marker"; // markers w/o resolved content
+  const isReadonly = block.kind === "marker" || block.kind === "chat-history";
   el.dataset.readonly = isReadonly ? "true" : "false";
   el.dataset.selected =
     state.inspecting && state.inspecting.id === block.id ? "true" : "false";
@@ -1394,6 +1445,45 @@ function renderBlock(block, overlaps) {
   }
 
   if (!isReadonly) el.addEventListener("click", () => inspectBlock(block));
+
+  // Drag-and-drop for section and marker blocks in the simulated prompt
+  const isDraggableKind = block.kind === "section" || block.kind === "marker" || block.kind === "chat-history";
+  if (isDraggableKind && block.section && state.presetFull) {
+    el.draggable = true;
+    el.dataset.sectionId = block.section.id;
+    el.addEventListener("dragstart", (ev) => {
+      draggedSectionId = block.section.id;
+      ev.dataTransfer.setData("text/plain", block.section.id);
+      ev.dataTransfer.effectAllowed = "move";
+      el.dataset.dragging = "true";
+    });
+    el.addEventListener("dragend", () => {
+      draggedSectionId = null;
+      delete el.dataset.dragging;
+      middleBodyEl.querySelectorAll(".kaio-block").forEach((b) => delete b.dataset.dragover);
+    });
+    el.addEventListener("dragover", (ev) => {
+      if (!draggedSectionId || draggedSectionId === block.section.id) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      middleBodyEl.querySelectorAll(".kaio-block").forEach((b) => delete b.dataset.dragover);
+      el.dataset.dragover = "true";
+    });
+    el.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      const fromId = ev.dataTransfer.getData("text/plain");
+      if (!fromId || fromId === block.section.id) return;
+      const sectionOrder = tryParseJSON(state.presetFull.preset.sectionOrder, []);
+      const order = sectionOrder.length ? [...sectionOrder] : (state.presetFull.sections || []).map((s) => s.id);
+      const fromIdx = order.indexOf(fromId);
+      const toIdx = order.indexOf(block.section.id);
+      if (fromIdx < 0 || toIdx < 0) return;
+      order.splice(fromIdx, 1);
+      order.splice(toIdx, 0, fromId);
+      reorderPresetSections(state.presetFull.preset.id, order);
+    });
+  }
+
   return el;
 }
 
@@ -1486,6 +1576,15 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     orderHTML = `<span class="kaio-block-order"${isOverlapping ? ' data-overlap="true"' : ''}>order ${ord}${isOverlapping ? ' — OVERLAPPING!' : ''}</span>`;
   }
 
+  // Group badge for sections/markers that belong to a group
+  let groupHTML = "";
+  if (block.section && block.section.groupId && state.presetFull && state.presetFull.groups) {
+    const group = state.presetFull.groups.find((g) => g.id === block.section.groupId);
+    if (group) {
+      groupHTML = `<span class="kaio-group-badge">${escapeHTML(group.name || "Group")}</span>`;
+    }
+  }
+
   // For depth-injected sub-blocks, the existing depth label still appears at
   // the right; the order indicator (if any) sits to its left.
   const depthLabel = isSubblock && block.depth !== undefined
@@ -1500,6 +1599,7 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
   head.innerHTML = `
     <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
+    ${groupHTML}
     ${hintHTML}
     ${orderHTML}
     ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
@@ -1654,6 +1754,7 @@ function makeDraft(block) {
           injectionPosition: block.section.injectionPosition || "ordered",
           injectionDepth: block.section.injectionDepth ?? 4,
           injectionOrder: block.section.injectionOrder ?? 100,
+          groupId: block.section.groupId || "",
         },
       };
     case "lorebook-entry":
@@ -1754,6 +1855,21 @@ function makeDraft(block) {
           order: block.folder.order ?? 0,
         },
       };
+    case "preset-editor":
+      {
+        const p = state.presetFull && state.presetFull.preset;
+        if (!p) return null;
+        return {
+          kind: "preset-editor",
+          sourceId: p.id,
+          fields: {
+            name: p.name || "",
+            description: p.description || "",
+            wrapFormat: p.wrapFormat || "xml",
+            author: p.author || "",
+          },
+        };
+      }
     default:
       return null;
   }
@@ -1805,133 +1921,156 @@ function renderRight() {
         ));
       }
       rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
+      rightBodyEl.appendChild(groupSelectField(f.groupId));
       break;
 
     case "lorebook-entry": {
       const matchMode = f.constant ? "constant" : (f.selective ? "selective" : "normal");
+      const lbC = { stateObj: state.lbInspectorCollapsed };
 
       // ── Basic ─────────────────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Basic"));
-      rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
-      rightBodyEl.appendChild(field("Content", f.content, "content", "textarea", null, 6));
-      rightBodyEl.appendChild(field("Description", f.description, "description", "textarea",
-        "Brief summary used by the Knowledge Router to decide whether to inject this entry. Not sent to the AI as content.", 3));
-      rightBodyEl.appendChild(field("Primary keys", f.keys, "keys", "input",
-        "Comma-separated keywords that trigger this entry when found in recent chat messages."));
-      rightBodyEl.appendChild(field("Secondary keys", f.secondaryKeys, "secondaryKeys", "input",
-        "Comma-separated secondary keywords. Used with Selective matching to further filter when this entry fires."));
-      rightBodyEl.appendChild(rowOf(
-        selectField("Position", String(f.position), "position",
-          [["0","before char"],["1","after char"],["2","depth"]]),
-        selectField("Role", f.role, "role", ["system", "user", "assistant"]),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        numberField("Depth", f.depth, "depth",
-          "How many messages deep to insert this entry when Position is set to depth."),
-        numberField("Order", f.order, "order",
-          "Insertion order relative to other lorebook entries at the same position. Lower numbers insert first."),
-      ));
-      rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
-      rightBodyEl.appendChild(matchingModeField(matchMode));
-      if (matchMode === "selective") {
-        rightBodyEl.appendChild(
-          selectField("Selective logic", f.selectiveLogic, "selectiveLogic", ["and", "or", "not"],
-            "How primary and secondary keys are combined. AND = both must match, OR = either, NOT = primary matches but secondary does not."),
-        );
-      }
+      rightBodyEl.appendChild(renderCollapsible("Basic", "basic", () => {
+        const c = document.createElement("div");
+        c.appendChild(field("Name", f.name, "name", "input"));
+        c.appendChild(field("Content", f.content, "content", "textarea", null, 6));
+        c.appendChild(field("Description", f.description, "description", "textarea",
+          "Brief summary used by the Knowledge Router to decide whether to inject this entry. Not sent to the AI as content.", 3));
+        c.appendChild(field("Primary keys", f.keys, "keys", "input",
+          "Comma-separated keywords that trigger this entry when found in recent chat messages."));
+        c.appendChild(field("Secondary keys", f.secondaryKeys, "secondaryKeys", "input",
+          "Comma-separated secondary keywords. Used with Selective matching to further filter when this entry fires."));
+        c.appendChild(rowOf(
+          selectField("Position", String(f.position), "position",
+            [["0","before char"],["1","after char"],["2","depth"]]),
+          selectField("Role", f.role, "role", ["system", "user", "assistant"]),
+        ));
+        c.appendChild(rowOf(
+          numberField("Depth", f.depth, "depth",
+            "How many messages deep to insert this entry when Position is set to depth."),
+          numberField("Order", f.order, "order",
+            "Insertion order relative to other lorebook entries at the same position. Lower numbers insert first."),
+        ));
+        c.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
+        c.appendChild(matchingModeField(matchMode));
+        if (matchMode === "selective") {
+          c.appendChild(
+            selectField("Selective logic", f.selectiveLogic, "selectiveLogic", ["and", "or", "not"],
+              "How primary and secondary keys are combined. AND = both must match, OR = either, NOT = primary matches but secondary does not."),
+          );
+        }
+        return c;
+      }, lbC));
 
       // ── Matching options ──────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Matching options"));
-      rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Probability", f.probability, "probability",
-          { step: "0.05", min: 0, max: 1 },
-          "Chance this entry is injected each time it triggers (0–100%). Leave empty to always inject when matched."),
-        nullableNumberField("Scan depth", f.scanDepth, "scanDepth",
-          { step: "1", min: 0 },
-          "How many messages back to scan for keywords. Leave empty to use the global lorebook default."),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        checkboxField("Match whole words", f.matchWholeWords, "matchWholeWords",
-          "Only trigger on whole-word matches. Prevents partial matches like 'cat' matching 'scatter'."),
-        checkboxField("Case sensitive", f.caseSensitive, "caseSensitive"),
-      ));
-      rightBodyEl.appendChild(checkboxField("Treat keys as regex", f.useRegex, "useRegex",
-        "Interpret primary and secondary keys as regular expressions instead of plain text."));
+      rightBodyEl.appendChild(renderCollapsible("Matching options", "matching", () => {
+        const c = document.createElement("div");
+        c.appendChild(rowOf(
+          nullableNumberField("Probability", f.probability, "probability",
+            { step: "0.05", min: 0, max: 1 },
+            "Chance this entry is injected each time it triggers (0–100%). Leave empty to always inject when matched."),
+          nullableNumberField("Scan depth", f.scanDepth, "scanDepth",
+            { step: "1", min: 0 },
+            "How many messages back to scan for keywords. Leave empty to use the global lorebook default."),
+        ));
+        c.appendChild(rowOf(
+          checkboxField("Match whole words", f.matchWholeWords, "matchWholeWords",
+            "Only trigger on whole-word matches. Prevents partial matches like 'cat' matching 'scatter'."),
+          checkboxField("Case sensitive", f.caseSensitive, "caseSensitive"),
+        ));
+        c.appendChild(checkboxField("Treat keys as regex", f.useRegex, "useRegex",
+          "Interpret primary and secondary keys as regular expressions instead of plain text."));
+        return c;
+      }, lbC));
 
       // ── Context filters ───────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Context filters"));
-      rightBodyEl.appendChild(rowOf(
-        selectField("Character mode", f.characterFilterMode, "characterFilterMode",
-          ["any", "include", "exclude"]),
-        field("Character IDs", f.characterFilterIds, "characterFilterIds", "input",
-          "Comma-separated character IDs. Used when Character mode is include or exclude."),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        selectField("Tag mode", f.characterTagFilterMode, "characterTagFilterMode",
-          ["any", "include", "exclude"]),
-        field("Character tags", f.characterTagFilters, "characterTagFilters", "input",
-          "Comma-separated character tags. Used when Tag mode is include or exclude."),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        selectField("Trigger mode", f.generationTriggerFilterMode, "generationTriggerFilterMode",
-          ["any", "include", "exclude"]),
-        field("Generation triggers", f.generationTriggerFilters, "generationTriggerFilters", "input",
-          "Comma-separated generation contexts to filter on, e.g. chat, game."),
-      ));
+      rightBodyEl.appendChild(renderCollapsible("Context filters", "contextFilters", () => {
+        const c = document.createElement("div");
+        c.appendChild(rowOf(
+          selectField("Character mode", f.characterFilterMode, "characterFilterMode",
+            ["any", "include", "exclude"]),
+          field("Character IDs", f.characterFilterIds, "characterFilterIds", "input",
+            "Comma-separated character IDs. Used when Character mode is include or exclude."),
+        ));
+        c.appendChild(rowOf(
+          selectField("Tag mode", f.characterTagFilterMode, "characterTagFilterMode",
+            ["any", "include", "exclude"]),
+          field("Character tags", f.characterTagFilters, "characterTagFilters", "input",
+            "Comma-separated character tags. Used when Tag mode is include or exclude."),
+        ));
+        c.appendChild(rowOf(
+          selectField("Trigger mode", f.generationTriggerFilterMode, "generationTriggerFilterMode",
+            ["any", "include", "exclude"]),
+          field("Generation triggers", f.generationTriggerFilters, "generationTriggerFilters", "input",
+            "Comma-separated generation contexts to filter on, e.g. chat, game."),
+        ));
+        return c;
+      }, lbC));
 
       // ── Matching sources ─────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Additional matching sources"));
-      rightBodyEl.appendChild(multiSelectField(
-        "Scan these in addition to the chat",
-        f.additionalMatchingSources,
-        "additionalMatchingSources",
-        [
-          ["character_name",        "Character name"],
-          ["character_description", "Character description"],
-          ["character_personality", "Character personality"],
-          ["character_scenario",    "Character scenario"],
-          ["character_tags",        "Character tags"],
-          ["persona_description",   "Persona description"],
-          ["persona_tags",          "Persona tags"],
-        ],
-      ));
+      rightBodyEl.appendChild(renderCollapsible("Additional matching sources", "matchingSources", () => {
+        const c = document.createElement("div");
+        c.appendChild(multiSelectField(
+          "Scan these in addition to the chat",
+          f.additionalMatchingSources,
+          "additionalMatchingSources",
+          [
+            ["character_name",        "Character name"],
+            ["character_description", "Character description"],
+            ["character_personality", "Character personality"],
+            ["character_scenario",    "Character scenario"],
+            ["character_tags",        "Character tags"],
+            ["persona_description",   "Persona description"],
+            ["persona_tags",          "Persona tags"],
+          ],
+        ));
+        return c;
+      }, lbC));
 
       // ── Timing ───────────────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Timing"));
-      rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Sticky", f.sticky, "sticky", { step: "1", min: 0 },
-          "Keep this entry injected for N turns after it triggers, even if keywords stop matching."),
-        nullableNumberField("Cooldown", f.cooldown, "cooldown", { step: "1", min: 0 },
-          "Block this entry from triggering again for N turns after it was last injected."),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        nullableNumberField("Delay", f.delay, "delay", { step: "1", min: 0 },
-          "Wait N turns after a keyword match before injecting this entry."),
-        nullableNumberField("Ephemeral", f.ephemeral, "ephemeral", { step: "1", min: 0 },
-          "Automatically remove this entry from context after N turns."),
-      ));
+      rightBodyEl.appendChild(renderCollapsible("Timing", "timing", () => {
+        const c = document.createElement("div");
+        c.appendChild(rowOf(
+          nullableNumberField("Sticky", f.sticky, "sticky", { step: "1", min: 0 },
+            "Keep this entry injected for N turns after it triggers, even if keywords stop matching."),
+          nullableNumberField("Cooldown", f.cooldown, "cooldown", { step: "1", min: 0 },
+            "Block this entry from triggering again for N turns after it was last injected."),
+        ));
+        c.appendChild(rowOf(
+          nullableNumberField("Delay", f.delay, "delay", { step: "1", min: 0 },
+            "Wait N turns after a keyword match before injecting this entry."),
+          nullableNumberField("Ephemeral", f.ephemeral, "ephemeral", { step: "1", min: 0 },
+            "Automatically remove this entry from context after N turns."),
+        ));
+        return c;
+      }, lbC));
 
       // ── Group & Tag ──────────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Group & Tag"));
-      rightBodyEl.appendChild(rowOf(
-        field("Group", f.group, "group", "input",
-          "Group name for mutual-exclusion logic. Only one entry per group fires per turn."),
-        nullableNumberField("Group weight", f.groupWeight, "groupWeight", { step: "0.1" },
-          "Weighted probability for selection within a group. Higher = more likely to be chosen."),
-      ));
-      rightBodyEl.appendChild(rowOf(
-        field("Tag", f.tag, "tag", "input"),
-        folderSelectField(d.lorebookId, f.folderId),
-      ));
+      rightBodyEl.appendChild(renderCollapsible("Group & Tag", "groupTag", () => {
+        const c = document.createElement("div");
+        c.appendChild(rowOf(
+          field("Group", f.group, "group", "input",
+            "Group name for mutual-exclusion logic. Only one entry per group fires per turn."),
+          nullableNumberField("Group weight", f.groupWeight, "groupWeight", { step: "0.1" },
+            "Weighted probability for selection within a group. Higher = more likely to be chosen."),
+        ));
+        c.appendChild(rowOf(
+          field("Tag", f.tag, "tag", "input"),
+          folderSelectField(d.lorebookId, f.folderId),
+        ));
+        return c;
+      }, lbC));
 
       // ── Advanced ─────────────────────────────────
-      rightBodyEl.appendChild(sectionHeader("Advanced"));
-      rightBodyEl.appendChild(rowOf(
-        checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion",
-          "Stop this entry's content from being scanned for additional lorebook keyword matches."),
-        checkboxField("Locked", f.locked, "locked",
-          "Lock this entry to prevent it from being edited in the regular lorebook UI."),
-      ));
+      rightBodyEl.appendChild(renderCollapsible("Advanced", "advanced", () => {
+        const c = document.createElement("div");
+        c.appendChild(rowOf(
+          checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion",
+            "Stop this entry's content from being scanned for additional lorebook keyword matches."),
+          checkboxField("Locked", f.locked, "locked",
+            "Lock this entry to prevent it from being edited in the regular lorebook UI."),
+        ));
+        return c;
+      }, lbC));
       break;
     }
 
@@ -1950,6 +2089,10 @@ function renderRight() {
       rightBodyEl.appendChild(field("Description", f.description, "description", "textarea"));
       rightBodyEl.appendChild(field("Personality", f.personality, "personality", "textarea"));
       rightBodyEl.appendChild(field("Scenario", f.scenario, "scenario", "textarea"));
+      break;
+
+    case "preset-editor":
+      rightBodyEl.appendChild(renderPresetEditorPanel());
       break;
 
     case "folder":
@@ -2586,7 +2729,7 @@ function onFieldChange(key, value) {
   // rendered, so re-render the whole inspector when it changes. Other fields
   // can patch the footer in place to preserve focus / caret.
   if ((state.draft.kind === "section" && key === "injectionPosition") ||
-      key === "matchingMode") {
+      key === "matchingMode" || key === "wrapFormat") {
     renderRight();
     return;
   }
@@ -2634,6 +2777,7 @@ async function saveDraft() {
           name: d.fields.name, content: d.fields.content, role: d.fields.role,
           enabled: d.fields.enabled, injectionPosition: d.fields.injectionPosition,
           injectionDepth: d.fields.injectionDepth, injectionOrder: d.fields.injectionOrder,
+          groupId: d.fields.groupId ? d.fields.groupId : null,
         };
         await api("PATCH", "/prompts/" + presetId + "/sections/" + d.sourceId, body);
         await loadPresetFull(presetId);
@@ -2691,6 +2835,25 @@ async function saveDraft() {
         await api("PATCH", "/characters/personas/" + d.sourceId, d.fields);
         await loadPersona(d.sourceId);
         break;
+      }
+      case "preset-editor": {
+        const presetId = d.sourceId;
+        const body = {
+          name: d.fields.name,
+          description: d.fields.description,
+          wrapFormat: d.fields.wrapFormat,
+          author: d.fields.author,
+        };
+        await api("PATCH", "/prompts/" + presetId, body);
+        await loadPresetFull(presetId);
+        // Update the presets list so the name is reflected in the picker
+        state.presets = await api("GET", "/prompts/").catch(() => state.presets);
+        state.inspecting = { kind: "preset-editor", id: "preset-editor" };
+        state.draft = makeDraft(state.inspecting);
+        state.isDirty = false;
+        renderAll();
+        showToast("Saved ✓", "success");
+        return;
       }
       case "folder": {
         const body = { name: d.fields.name, enabled: d.fields.enabled, order: Number(d.fields.order) };
@@ -2824,15 +2987,895 @@ function showToast(msg, kind) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { toastEl.dataset.visible = "false"; }, 1800);
 }
+// ── Preset editor panel (3 collapsibles: Overview / Sections / Variables) ──
+function renderPresetEditorPanel() {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-preset-editor";
+  const p = state.presetFull && state.presetFull.preset;
+  if (!p) return wrap;
+  const f = state.draft && state.draft.fields;
+
+  // ── Overview collapsible ──
+  wrap.appendChild(renderCollapsible("Overview", "overview", () => {
+    const content = document.createElement("div");
+    if (!f) return content;
+    content.appendChild(field("Name", f.name, "name", "input"));
+    content.appendChild(field("Description", f.description, "description", "textarea",
+      "Brief description of this preset. Shown in the preset picker.", 3));
+    content.appendChild(wrapFormatField(f.wrapFormat));
+    content.appendChild(field("Author", f.author, "author", "input"));
+    const stats = document.createElement("div");
+    stats.className = "kaio-preset-stats";
+    const secCount = (state.presetFull.sections || []).length;
+    const grpCount = (state.presetFull.groups || []).length;
+    stats.innerHTML = `<span class="kaio-preset-stat"><strong>${secCount}</strong> Sections</span>` +
+      `<span class="kaio-preset-stat"><strong>${grpCount}</strong> Groups</span>`;
+    content.appendChild(stats);
+    return content;
+  }));
+
+  // ── Sections collapsible ──
+  const secCount = (state.presetFull.sections || []).length;
+  wrap.appendChild(renderCollapsible("Sections", "sections", () => renderPresetSectionsPanel(), { count: secCount }));
+
+  // ── Preset Variables collapsible ──
+  const varCount = (state.presetFull.choiceBlocks || []).length;
+  wrap.appendChild(renderCollapsible("Preset Variables", "variables", () => renderPresetVariablesPanel(), { count: varCount }));
+
+  return wrap;
+}
+
+function renderCollapsible(title, key, contentFn, opts) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-collapsible";
+  const stateObj = (opts && opts.stateObj) || state.presetEditorCollapsed;
+  const collapsed = stateObj[key];
+  if (collapsed) wrap.dataset.collapsed = "true";
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "kaio-collapsible-header";
+  const countHTML = (opts && opts.count != null) ? `<span class="kaio-collapsible-count">${opts.count}</span>` : "";
+  header.innerHTML = `<span class="kaio-collapsible-caret">▾</span><span class="kaio-collapsible-title">${escapeHTML(title)}</span>${countHTML}`;
+  header.addEventListener("click", () => {
+    stateObj[key] = !stateObj[key];
+    renderRight();
+  });
+  wrap.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "kaio-collapsible-body";
+  body.appendChild(contentFn());
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function wrapFormatField(value) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, "Wrap format", "Sections wrapped in <xml_tags>, ## Markdown headings, or no wrapping.");
+  wrap.appendChild(lab);
+  const row = document.createElement("div");
+  row.className = "kaio-match-mode";
+  for (const [val, label, icon] of [["xml", "XML", "</\>"], ["markdown", "Markdown", "#"], ["none", "None", "T"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kaio-match-btn kaio-wrap-btn";
+    btn.dataset.active = String(value === val);
+    const iconEl = document.createElement("span");
+    iconEl.className = "kaio-wrap-icon";
+    iconEl.textContent = icon;
+    btn.appendChild(iconEl);
+    btn.appendChild(document.createTextNode(label.toUpperCase()));
+    btn.addEventListener("click", () => onFieldChange("wrapFormat", val));
+    row.appendChild(btn);
+  }
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function groupSelectField(currentValue) {
+  const groups = (state.presetFull && state.presetFull.groups) || [];
+  const options = [["", "(none)"], ...groups.map((g) => [g.id, g.name || "(unnamed group)"])];
+  return selectField("Group", currentValue || "", "groupId", options,
+    "Assign this section to a group. Groups organize related sections visually.");
+}
+
+// ── Sections management panel ─────────────────────────────────
+function renderPresetSectionsPanel() {
+  const wrap = document.createElement("div");
+  const presetId = state.presetFull.preset.id;
+  const sections = state.presetFull.sections || [];
+  const groups = state.presetFull.groups || [];
+  const sectionOrder = tryParseJSON(state.presetFull.preset.sectionOrder, []);
+  const sectionsById = Object.fromEntries(sections.map((s) => [s.id, s]));
+  const orderedIds = sectionOrder.length ? sectionOrder : sections.map((s) => s.id);
+
+  // Create button with dropdown
+  const actions = document.createElement("div");
+  actions.className = "kaio-create-actions";
+  actions.style.position = "relative";
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "kaio-create-btn";
+  addBtn.textContent = "+ Section";
+  addBtn.addEventListener("click", () => {
+    const existing = actions.querySelector(".kaio-add-section-menu");
+    if (existing) { existing.remove(); return; }
+    const menu = document.createElement("div");
+    menu.className = "kaio-add-section-menu";
+    const items = [
+      { label: "Prompt Block", marker: false },
+      { divider: true, label: "Markers" },
+      { label: "Character Info", type: "character" },
+      { label: "Lorebook Marker (All)", type: "lorebook" },
+      { label: "Persona", type: "persona" },
+      { label: "Chat History", type: "chat_history" },
+      { label: "Chat Summary", type: "chat_summary" },
+      { label: "Lorebook Marker (Before)", type: "world_info_before" },
+      { label: "Lorebook Marker (After)", type: "world_info_after" },
+      { label: "Dialogue Examples", type: "dialogue_examples" },
+    ];
+    for (const it of items) {
+      if (it.divider) {
+        const d = document.createElement("div");
+        d.className = "kaio-add-section-divider";
+        d.textContent = it.label;
+        menu.appendChild(d);
+        continue;
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "kaio-add-section-item";
+      btn.textContent = it.label;
+      btn.addEventListener("click", async () => {
+        menu.remove();
+        if (it.marker === false) {
+          await createPresetSection(presetId);
+        } else {
+          await createPresetMarker(presetId, it.label, it.type);
+        }
+      });
+      menu.appendChild(btn);
+    }
+    actions.appendChild(menu);
+    const dismiss = (ev) => { if (!menu.contains(ev.target) && ev.target !== addBtn) { menu.remove(); document.removeEventListener("click", dismiss, true); } };
+    setTimeout(() => document.addEventListener("click", dismiss, true), 0);
+  });
+  actions.appendChild(addBtn);
+  wrap.appendChild(actions);
+
+  // Groups management
+  wrap.appendChild(renderPresetGroupsUI(presetId, groups, sections));
+
+  // Section order list
+  wrap.appendChild(sectionHeader("Section order"));
+  if (!orderedIds.length) {
+    const empty = document.createElement("div");
+    empty.className = "kaio-field-help";
+    empty.textContent = "No sections in this preset yet.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const list = document.createElement("div");
+  list.className = "kaio-preset-section-list";
+  list.dataset.presetId = presetId;
+
+  for (const id of orderedIds) {
+    const s = sectionsById[id];
+    if (!s) continue;
+    const row = document.createElement("div");
+    row.className = "kaio-preset-section-row";
+    row.draggable = true;
+    row.dataset.sectionId = s.id;
+
+    // Drag handle
+    const handle = document.createElement("span");
+    handle.className = "kaio-drag-handle";
+    handle.textContent = "⠿";
+    row.appendChild(handle);
+
+    // Tag
+    const tag = document.createElement("span");
+    tag.className = "kaio-block-tag";
+    const isMarker = s.isMarker === true || s.isMarker === "true";
+    tag.dataset.kind = isMarker ? "marker" : "section";
+    tag.textContent = isMarker ? "MARKER" : "SECTION";
+    row.appendChild(tag);
+
+    // Name
+    const name = document.createElement("span");
+    name.className = "kaio-preset-section-name";
+    name.textContent = s.name || s.identifier || "(unnamed)";
+    row.appendChild(name);
+
+    // Group badge
+    if (s.groupId) {
+      const group = groups.find((g) => g.id === s.groupId);
+      if (group) {
+        const badge = document.createElement("span");
+        badge.className = "kaio-group-badge";
+        badge.textContent = group.name || "Group";
+        row.appendChild(badge);
+      }
+    }
+
+    // Role
+    const role = document.createElement("span");
+    role.className = "kaio-preset-section-role";
+    role.textContent = s.role || "system";
+    row.appendChild(role);
+
+    // Delete button
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "kaio-preset-section-delete";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete this section";
+    delBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      deletePresetSection(presetId, s.id, s.name || s.identifier || "this section");
+    });
+    row.appendChild(delBtn);
+
+    // Drag events
+    row.addEventListener("dragstart", (ev) => {
+      ev.dataTransfer.setData("text/plain", s.id);
+      ev.dataTransfer.effectAllowed = "move";
+      row.dataset.dragging = "true";
+    });
+    row.addEventListener("dragend", () => {
+      delete row.dataset.dragging;
+      list.querySelectorAll(".kaio-preset-section-row").forEach((r) => delete r.dataset.dragover);
+    });
+    row.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      list.querySelectorAll(".kaio-preset-section-row").forEach((r) => delete r.dataset.dragover);
+      row.dataset.dragover = "true";
+    });
+    row.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      const draggedId = ev.dataTransfer.getData("text/plain");
+      if (!draggedId || draggedId === s.id) return;
+      const currentOrder = [...orderedIds];
+      const fromIdx = currentOrder.indexOf(draggedId);
+      const toIdx = currentOrder.indexOf(s.id);
+      if (fromIdx < 0 || toIdx < 0) return;
+      currentOrder.splice(fromIdx, 1);
+      currentOrder.splice(toIdx, 0, draggedId);
+      reorderPresetSections(presetId, currentOrder);
+    });
+
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+// ── Groups UI ─────────────────────────────────────────────────
+function renderPresetGroupsUI(presetId, groups, sections) {
+  const wrap = document.createElement("div");
+  wrap.appendChild(sectionHeader("Groups"));
+
+  if (!groups.length) {
+    const empty = document.createElement("div");
+    empty.className = "kaio-field-help";
+    empty.textContent = "No groups defined. Groups let you organize related sections.";
+    wrap.appendChild(empty);
+  } else {
+    const list = document.createElement("div");
+    list.className = "kaio-preset-group-list";
+    for (const g of groups) {
+      list.appendChild(renderPresetGroupRow(presetId, g, groups, sections));
+    }
+    wrap.appendChild(list);
+  }
+
+  const createBtn = document.createElement("button");
+  createBtn.type = "button";
+  createBtn.className = "kaio-create-btn";
+  createBtn.style.marginTop = "0.375rem";
+  createBtn.textContent = "+ Group";
+  createBtn.addEventListener("click", () => createPresetGroup(presetId));
+  wrap.appendChild(createBtn);
+  return wrap;
+}
+
+function renderPresetGroupRow(presetId, group, allGroups, allSections) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-preset-group-row";
+  const isExpanded = state.presetGroupBatchAdd.groupId === group.id;
+
+  const header = document.createElement("div");
+  header.className = "kaio-preset-group-header";
+
+  const caret = document.createElement("span");
+  caret.className = "kaio-collapsible-caret kaio-group-caret";
+  if (!isExpanded) caret.style.transform = "rotate(-90deg)";
+  header.appendChild(caret);
+
+  const icon = document.createElement("span");
+  icon.textContent = "📁";
+  icon.className = "kaio-folder-icon";
+  header.appendChild(icon);
+
+  // Editable name
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "kaio-input kaio-group-name-input";
+  nameInput.value = group.name || "";
+  nameInput.placeholder = "(unnamed group)";
+  let renameTimer = null;
+  nameInput.addEventListener("input", () => {
+    clearTimeout(renameTimer);
+    renameTimer = setTimeout(() => {
+      renamePresetGroup(presetId, group.id, nameInput.value);
+    }, 600);
+  });
+  nameInput.addEventListener("click", (ev) => ev.stopPropagation());
+  header.appendChild(nameInput);
+
+  const memberCount = allSections.filter((s) => s.groupId === group.id).length;
+  const count = document.createElement("span");
+  count.className = "kaio-folder-count";
+  count.textContent = String(memberCount);
+  header.appendChild(count);
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "kaio-preset-section-delete";
+  delBtn.textContent = "✕";
+  delBtn.title = "Delete group";
+  delBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    deletePresetGroup(presetId, group.id);
+  });
+  header.appendChild(delBtn);
+
+  header.addEventListener("click", () => {
+    if (state.presetGroupBatchAdd.groupId === group.id) {
+      state.presetGroupBatchAdd = { groupId: null, selected: new Set() };
+    } else {
+      state.presetGroupBatchAdd = { groupId: group.id, selected: new Set() };
+    }
+    renderRight();
+  });
+
+  wrap.appendChild(header);
+
+  if (isExpanded) {
+    wrap.appendChild(renderGroupSectionsBatchAdd(presetId, group.id, allSections));
+  }
+  return wrap;
+}
+
+function renderGroupSectionsBatchAdd(presetId, groupId, allSections) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-group-batch-body";
+
+  // Current members
+  const members = allSections.filter((s) => s.groupId === groupId);
+  if (members.length) {
+    const memberList = document.createElement("div");
+    memberList.className = "kaio-folder-entries";
+    for (const s of members) {
+      const row = document.createElement("div");
+      row.className = "kaio-folder-entry-row";
+      const nameEl = document.createElement("span");
+      nameEl.className = "kaio-folder-entry-name";
+      nameEl.textContent = s.name || s.identifier || "(unnamed)";
+      row.appendChild(nameEl);
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "kaio-folder-entry-remove";
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", async () => {
+        try {
+          await api("PATCH", "/prompts/" + presetId + "/sections/" + s.id, { groupId: null });
+          await loadPresetFull(presetId);
+          renderRight();
+          renderMiddle();
+          showToast("Removed from group", "info");
+        } catch (err) {
+          console.error("[kolache-AIO] Remove from group failed", err);
+          showToast("Failed to remove", "error");
+        }
+      });
+      row.appendChild(removeBtn);
+      memberList.appendChild(row);
+    }
+    wrap.appendChild(memberList);
+  }
+
+  // Available to add
+  const available = allSections.filter((s) => !s.groupId || s.groupId === "");
+  if (available.length) {
+    const listEl = document.createElement("div");
+    listEl.className = "kaio-batch-list";
+    listEl.style.marginTop = "0.375rem";
+    for (const s of available) {
+      const row = document.createElement("label");
+      row.className = "kaio-batch-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = state.presetGroupBatchAdd.selected.has(s.id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) state.presetGroupBatchAdd.selected.add(s.id);
+        else state.presetGroupBatchAdd.selected.delete(s.id);
+        const btn = wrap.querySelector(".kaio-batch-add-btn");
+        if (btn) {
+          const n = state.presetGroupBatchAdd.selected.size;
+          btn.textContent = n ? "Add selected (" + n + ")" : "Add selected";
+          btn.disabled = !n;
+        }
+      });
+      row.appendChild(cb);
+      const nameEl = document.createElement("span");
+      nameEl.className = "kaio-batch-item-name";
+      nameEl.textContent = s.name || s.identifier || "(unnamed)";
+      row.appendChild(nameEl);
+      listEl.appendChild(row);
+    }
+    wrap.appendChild(listEl);
+
+    const n = state.presetGroupBatchAdd.selected.size;
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "kaio-btn kaio-btn-primary kaio-batch-add-btn";
+    addBtn.style.marginTop = "0.375rem";
+    addBtn.style.width = "100%";
+    addBtn.style.fontSize = "0.6875rem";
+    addBtn.textContent = n ? "Add selected (" + n + ")" : "Add selected";
+    addBtn.disabled = !n;
+    addBtn.addEventListener("click", async () => {
+      const ids = [...state.presetGroupBatchAdd.selected];
+      if (!ids.length) return;
+      try {
+        await Promise.all(ids.map((id) =>
+          api("PATCH", "/prompts/" + presetId + "/sections/" + id, { groupId: groupId })
+        ));
+        await loadPresetFull(presetId);
+        state.presetGroupBatchAdd.selected.clear();
+        renderRight();
+        renderMiddle();
+        showToast("Added " + ids.length + " section" + (ids.length === 1 ? "" : "s") + " to group", "success");
+      } catch (err) {
+        console.error("[kolache-AIO] Group batch add failed", err);
+        showToast("Failed to add sections", "error");
+      }
+    });
+    wrap.appendChild(addBtn);
+  } else if (!members.length) {
+    const msg = document.createElement("div");
+    msg.className = "kaio-field-help";
+    msg.textContent = "No ungrouped sections available.";
+    wrap.appendChild(msg);
+  }
+  return wrap;
+}
+
+// ── Preset variables management ───────────────────────────────
+function renderPresetVariablesPanel() {
+  const wrap = document.createElement("div");
+  const presetId = state.presetFull.preset.id;
+  const cbs = state.presetFull.choiceBlocks || [];
+
+  if (!cbs.length) {
+    const empty = document.createElement("div");
+    empty.className = "kaio-field-help";
+    empty.textContent = "No variables defined. Variables let users select options that substitute into the prompt.";
+    wrap.appendChild(empty);
+  } else {
+    const list = document.createElement("div");
+    list.className = "kaio-preset-var-list";
+    for (const cb of cbs) {
+      list.appendChild(renderPresetVariableRow(presetId, cb));
+    }
+    wrap.appendChild(list);
+  }
+
+  const createBtn = document.createElement("button");
+  createBtn.type = "button";
+  createBtn.className = "kaio-create-btn";
+  createBtn.style.marginTop = "0.375rem";
+  createBtn.textContent = "+ Variable";
+  createBtn.addEventListener("click", () => createPresetVariable(presetId));
+  wrap.appendChild(createBtn);
+  return wrap;
+}
+
+function renderPresetVariableRow(presetId, cb) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-preset-var-row";
+  const isExpanded = state.presetExpandedVariableId === cb.id;
+
+  const header = document.createElement("div");
+  header.className = "kaio-preset-var-header";
+  header.addEventListener("click", () => {
+    state.presetExpandedVariableId = isExpanded ? null : cb.id;
+    renderRight();
+  });
+
+  const caret = document.createElement("span");
+  caret.className = "kaio-collapsible-caret";
+  if (!isExpanded) caret.style.transform = "rotate(-90deg)";
+  header.appendChild(caret);
+
+  const varTag = document.createElement("span");
+  varTag.className = "kaio-preset-var-tag";
+  varTag.textContent = "#";
+  header.appendChild(varTag);
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "kaio-preset-var-name";
+  nameEl.textContent = cb.variableName || "(unnamed)";
+  header.appendChild(nameEl);
+
+  const opts = choiceBlockOptions(cb);
+  const optCount = document.createElement("span");
+  optCount.className = "kaio-folder-count";
+  optCount.style.background = "rgba(251, 191, 36, 0.15)";
+  optCount.style.color = "#fbbf24";
+  optCount.textContent = opts.length + " option" + (opts.length === 1 ? "" : "s");
+  header.appendChild(optCount);
+
+  const macroTag = document.createElement("span");
+  macroTag.className = "kaio-preset-var-macro";
+  macroTag.textContent = "{{" + (cb.variableName || "") + "}}";
+  header.appendChild(macroTag);
+
+  wrap.appendChild(header);
+
+  if (isExpanded) {
+    wrap.appendChild(renderPresetVariableEditor(presetId, cb));
+  }
+  return wrap;
+}
+
+function renderPresetVariableEditor(presetId, cb) {
+  const body = document.createElement("div");
+  body.className = "kaio-preset-var-body";
+  const opts = choiceBlockOptions(cb);
+  // Ensure subsequent re-renders see in-progress mutations (added/removed options)
+  cb.options = opts;
+
+  // Variable name
+  const nameField = document.createElement("div");
+  nameField.className = "kaio-field";
+  const nameLab = document.createElement("label");
+  nameLab.className = "kaio-field-label";
+  applyLabel(nameLab, "Variable name", "Used as {{variableName}} macro in sections.");
+  nameField.appendChild(nameLab);
+  const nameInput = document.createElement("input");
+  nameInput.className = "kaio-input";
+  nameInput.value = cb.variableName || "";
+  nameField.appendChild(nameInput);
+  body.appendChild(nameField);
+
+  // Question
+  const qField = document.createElement("div");
+  qField.className = "kaio-field";
+  const qLab = document.createElement("label");
+  qLab.className = "kaio-field-label";
+  applyLabel(qLab, "Question", "Prompt shown to the user when selecting an option.");
+  qField.appendChild(qLab);
+  const qInput = document.createElement("textarea");
+  qInput.className = "kaio-textarea";
+  qInput.rows = 2;
+  qInput.value = cb.question || "";
+  qField.appendChild(qInput);
+  body.appendChild(qField);
+
+  // Multi-select, separator, random
+  const optRow = document.createElement("div");
+  optRow.className = "kaio-field kaio-field-row";
+  optRow.style.gridTemplateColumns = "1fr 1fr 1fr";
+
+  const msWrap = document.createElement("label");
+  msWrap.className = "kaio-checkbox";
+  const msCb = document.createElement("input");
+  msCb.type = "checkbox";
+  msCb.checked = cb.multiSelect === true || cb.multiSelect === "true";
+  msWrap.appendChild(msCb);
+  const msTxt = document.createElement("span");
+  msTxt.textContent = "Multi-select";
+  msWrap.appendChild(msTxt);
+  optRow.appendChild(msWrap);
+
+  const rpWrap = document.createElement("label");
+  rpWrap.className = "kaio-checkbox";
+  const rpCb = document.createElement("input");
+  rpCb.type = "checkbox";
+  rpCb.checked = cb.randomPick === true || cb.randomPick === "true";
+  rpWrap.appendChild(rpCb);
+  const rpTxt = document.createElement("span");
+  rpTxt.textContent = "Random pick";
+  rpWrap.appendChild(rpTxt);
+  optRow.appendChild(rpWrap);
+
+  const sepField = document.createElement("div");
+  sepField.className = "kaio-field";
+  sepField.style.marginBottom = "0";
+  const sepLab = document.createElement("label");
+  sepLab.className = "kaio-field-label";
+  sepLab.textContent = "Separator";
+  sepField.appendChild(sepLab);
+  const sepInput = document.createElement("input");
+  sepInput.className = "kaio-input";
+  sepInput.value = cb.separator ?? ", ";
+  sepField.appendChild(sepInput);
+  optRow.appendChild(sepField);
+  body.appendChild(optRow);
+
+  // Options list
+  body.appendChild(sectionHeader("Options"));
+  const optsList = document.createElement("div");
+  optsList.className = "kaio-preset-var-opts";
+  for (let i = 0; i < opts.length; i++) {
+    optsList.appendChild(renderVariableOptionRow(opts, i));
+  }
+  body.appendChild(optsList);
+
+  const addOptBtn = document.createElement("button");
+  addOptBtn.type = "button";
+  addOptBtn.className = "kaio-create-btn";
+  addOptBtn.style.marginTop = "0.25rem";
+  addOptBtn.textContent = "+ Option";
+  addOptBtn.addEventListener("click", () => {
+    opts.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), label: "", value: "" });
+    renderRight();
+  });
+  body.appendChild(addOptBtn);
+
+  // Action buttons
+  const actions = document.createElement("div");
+  actions.className = "kaio-preset-var-actions";
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "kaio-btn kaio-btn-delete";
+  delBtn.textContent = "Delete";
+  delBtn.addEventListener("click", () => deletePresetVariable(presetId, cb.id));
+  actions.appendChild(delBtn);
+
+  const spacer = document.createElement("span");
+  spacer.className = "kaio-spacer";
+  actions.appendChild(spacer);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "kaio-btn kaio-btn-primary";
+  saveBtn.textContent = "Save variable";
+  saveBtn.addEventListener("click", async () => {
+    try {
+      const body = {
+        variableName: nameInput.value.trim(),
+        question: qInput.value,
+        options: opts,
+        multiSelect: msCb.checked,
+        randomPick: rpCb.checked,
+        separator: sepInput.value,
+      };
+      await api("PATCH", "/prompts/" + presetId + "/variables/" + cb.id, body);
+      await loadPresetFull(presetId);
+      renderRight();
+      renderMiddle();
+      showToast("Variable saved ✓", "success");
+    } catch (err) {
+      console.error("[kolache-AIO] Save variable failed", err);
+      showToast("Save failed — see console", "error");
+    }
+  });
+  actions.appendChild(saveBtn);
+  body.appendChild(actions);
+
+  return body;
+}
+
+function renderVariableOptionRow(opts, index) {
+  const opt = opts[index];
+  const row = document.createElement("div");
+  row.className = "kaio-preset-var-opt-row";
+
+  const labelInput = document.createElement("input");
+  labelInput.className = "kaio-input";
+  labelInput.placeholder = "Label";
+  labelInput.value = opt.label || "";
+  labelInput.addEventListener("input", () => { opt.label = labelInput.value; });
+  row.appendChild(labelInput);
+
+  const valueInput = document.createElement("input");
+  valueInput.className = "kaio-input";
+  valueInput.placeholder = "Value";
+  valueInput.value = opt.value || "";
+  valueInput.addEventListener("input", () => { opt.value = valueInput.value; });
+  row.appendChild(valueInput);
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "kaio-preset-section-delete";
+  delBtn.textContent = "✕";
+  delBtn.title = "Remove option";
+  delBtn.addEventListener("click", () => {
+    opts.splice(index, 1);
+    renderRight();
+  });
+  row.appendChild(delBtn);
+  return row;
+}
+
+// ── Preset management API actions ─────────────────────────────
+function generateId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+async function createPresetSection(presetId) {
+  try {
+    await api("POST", "/prompts/" + presetId + "/sections", {
+      identifier: generateId(),
+      name: "New Section",
+      content: "",
+      role: "system",
+    });
+    await loadPresetFull(presetId);
+    renderRight();
+    renderMiddle();
+    showToast("Section created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create section failed", err);
+    showToast("Failed to create section", "error");
+  }
+}
+
+async function createPresetMarker(presetId, name, type) {
+  try {
+    await api("POST", "/prompts/" + presetId + "/sections", {
+      identifier: generateId(),
+      name: name || "New Marker",
+      content: "",
+      role: "system",
+      isMarker: true,
+      markerConfig: { type: type || "world_info_before" },
+    });
+    await loadPresetFull(presetId);
+    renderRight();
+    renderMiddle();
+    showToast("Marker created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create marker failed", err);
+    showToast("Failed to create marker", "error");
+  }
+}
+
+async function deletePresetSection(presetId, sectionId, label) {
+  const confirmed = await new Promise((resolve) => {
+    const bg = document.createElement("div");
+    bg.className = "kaio-confirm-bg";
+    bg.innerHTML = '<div class="kaio-confirm"><div class="kaio-confirm-title">Delete section?</div><div class="kaio-confirm-msg">Permanently delete "' + escapeHTML(label) + '"? This cannot be undone.</div><div class="kaio-confirm-actions"><button class="kaio-btn kaio-btn-ghost" data-act="cancel">Cancel</button><button class="kaio-btn kaio-btn-danger" data-act="delete">Delete</button></div></div>';
+    overlayEl.querySelector(".kaio-shell").appendChild(bg);
+    bg.querySelector('[data-act="cancel"]').addEventListener("click", () => { bg.remove(); resolve(false); });
+    bg.querySelector('[data-act="delete"]').addEventListener("click", () => { bg.remove(); resolve(true); });
+  });
+  if (!confirmed) return;
+  try {
+    await api("DELETE", "/prompts/" + presetId + "/sections/" + sectionId);
+    await loadPresetFull(presetId);
+    renderRight();
+    renderMiddle();
+    showToast("Section deleted", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Delete section failed", err);
+    showToast("Failed to delete section", "error");
+  }
+}
+
+async function reorderPresetSections(presetId, sectionIds) {
+  try {
+    await api("PUT", "/prompts/" + presetId + "/sections/reorder", { sectionIds });
+    await loadPresetFull(presetId);
+    renderRight();
+    renderMiddle();
+  } catch (err) {
+    console.error("[kolache-AIO] Reorder sections failed", err);
+    showToast("Failed to reorder sections", "error");
+  }
+}
+
+async function createPresetGroup(presetId) {
+  try {
+    await api("POST", "/prompts/" + presetId + "/groups", { name: "New Group" });
+    await loadPresetFull(presetId);
+    renderRight();
+    showToast("Group created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create group failed", err);
+    showToast("Failed to create group", "error");
+  }
+}
+
+async function renamePresetGroup(presetId, groupId, name) {
+  try {
+    await api("PATCH", "/prompts/" + presetId + "/groups/" + groupId, { name });
+    await loadPresetFull(presetId);
+    renderMiddle();
+  } catch (err) {
+    console.error("[kolache-AIO] Rename group failed", err);
+  }
+}
+
+async function deletePresetGroup(presetId, groupId) {
+  try {
+    await api("DELETE", "/prompts/" + presetId + "/groups/" + groupId);
+    await loadPresetFull(presetId);
+    if (state.presetGroupBatchAdd.groupId === groupId) {
+      state.presetGroupBatchAdd = { groupId: null, selected: new Set() };
+    }
+    renderRight();
+    renderMiddle();
+    showToast("Group deleted", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Delete group failed", err);
+    showToast("Failed to delete group", "error");
+  }
+}
+
+async function createPresetVariable(presetId) {
+  try {
+    const result = await api("POST", "/prompts/" + presetId + "/variables", {
+      variableName: "new_variable",
+      question: "Select an option",
+      options: [{ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), label: "Option 1", value: "" }],
+    });
+    await loadPresetFull(presetId);
+    if (result && result.id) state.presetExpandedVariableId = result.id;
+    renderRight();
+    showToast("Variable created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create variable failed", err);
+    showToast("Failed to create variable", "error");
+  }
+}
+
+async function deletePresetVariable(presetId, variableId) {
+  const confirmed = await new Promise((resolve) => {
+    const bg = document.createElement("div");
+    bg.className = "kaio-confirm-bg";
+    bg.innerHTML = '<div class="kaio-confirm"><div class="kaio-confirm-title">Delete variable?</div><div class="kaio-confirm-msg">Permanently delete this variable? Any {{macro}} references to it in sections will stop resolving.</div><div class="kaio-confirm-actions"><button class="kaio-btn kaio-btn-ghost" data-act="cancel">Cancel</button><button class="kaio-btn kaio-btn-danger" data-act="delete">Delete</button></div></div>';
+    overlayEl.querySelector(".kaio-shell").appendChild(bg);
+    bg.querySelector('[data-act="cancel"]').addEventListener("click", () => { bg.remove(); resolve(false); });
+    bg.querySelector('[data-act="delete"]').addEventListener("click", () => { bg.remove(); resolve(true); });
+  });
+  if (!confirmed) return;
+  try {
+    await api("DELETE", "/prompts/" + presetId + "/variables/" + variableId);
+    await loadPresetFull(presetId);
+    if (state.presetExpandedVariableId === variableId) state.presetExpandedVariableId = null;
+    renderRight();
+    showToast("Variable deleted", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Delete variable failed", err);
+    showToast("Failed to delete variable", "error");
+  }
+}
+
+// ── Drag-and-drop state for simulated prompt section reordering ──
+let draggedSectionId = null;
+
 function escapeHTML(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
 injectTopbarButton();
-marinara.observe(document.body, () => { injectTopbarButton(); });
+tryInjectExtensionLauncher();
+marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });
 marinara.onCleanup(() => {
   if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
   document.removeEventListener("keydown", onKeydown);
-  document.querySelectorAll(".kaio-tab-btn").forEach((b) => b.remove());
+  document.querySelectorAll(".kaio-tab-btn, .kaio-ext-launcher").forEach((b) => b.remove());
 });

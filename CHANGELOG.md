@@ -2,6 +2,28 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.5.0] — 2026-05-16
+
+Preset editing from the Inspector — sections, groups, variables, and drag-and-drop reordering without leaving the AIO console.
+
+### Added
+
+- **Preset Editor in the Inspector.** A ✏️ button on the preset dropdown opens a full preset editor with three collapsible sections:
+  - **Overview** — edit name, description, wrap format (XML / Markdown / None toggle), and author. Uses the standard Save / Revert draft flow.
+  - **Sections** — create new sections or markers from a type dropdown (Prompt Block, Character Info, Lorebook All/Before/After, Persona, Chat History, Chat Summary, Dialogue Examples), delete sections, and drag-and-drop to reorder. Includes group management with create / rename / delete and batch-add sections to groups (same pattern as lorebook folder batch-add).
+  - **Preset Variables** — create, delete, and edit variables inline: variable name, question, options list with add / remove, multi-select toggle, separator, and random-pick toggle.
+- **Group dropdown on section Inspector.** When editing a section, a Group dropdown lets you assign it to a group manually.
+- **Group badge in Simulated Prompt.** Sections and markers belonging to a group display a green pill badge with the group name, left of the role label.
+- **Drag-and-drop reordering in Simulated Prompt.** Sections, markers, and chat-history blocks can be dragged to reorder. The new order is saved to the preset's `sectionOrder` via `PUT /sections/reorder`.
+- **Collapsible lorebook entry sections.** The lorebook entry Inspector fields are now organized into seven collapsible sections (Basic, Matching options, Context filters, Additional matching sources, Timing, Group & Tag, Advanced). Basic starts expanded; the rest start collapsed to reduce scrolling.
+- **Extension-card launch button.** A 🥞 button is injected into the extension's own card in Settings → Extensions, providing an alternate way to open the console — especially useful on mobile where the toolbar icon is hidden.
+
+### Changed
+
+- **Collapsible styling unified.** The preset editor and lorebook entry collapsibles use the same visual style as the existing Preset Variables panel: bottom-border separator, caret + title + count badge header, no card border.
+- **Chat History blocks grayed out.** Chat History blocks in the Simulated Prompt now have the same dashed-border, reduced-opacity appearance as markers, since their content is resolved at runtime.
+- **Toolbar 🥞 hidden on mobile.** On screens ≤ 768px the toolbar button is hidden to avoid overlapping the navigation. Mobile users access the console via the extension-card button in Settings → Extensions.
+
 ## [1.4.0] — 2026-05-15
 
 Lorebook folder support — folders are now first-class objects in the extension, with full CRUD, batch entry assignment, and integrated selection logic.

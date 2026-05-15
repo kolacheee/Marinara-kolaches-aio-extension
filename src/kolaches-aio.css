@@ -43,6 +43,21 @@
   filter: saturate(1.1);
 }
 
+/* Extension-card launcher (Settings → Extensions) */
+.kaio-ext-launcher {
+  background: transparent;
+  border: 0;
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 0.375rem;
+  transition: transform 0.15s;
+  filter: saturate(1.1);
+  flex-shrink: 0;
+}
+.kaio-ext-launcher:hover { transform: scale(1.15); }
+
 /* ─── Overlay ───────────────────────────────── */
 .kaio-overlay {
   position: fixed;
@@ -213,6 +228,13 @@
   margin-bottom: 0.375rem;
 }
 .kaio-source-icon { font-size: 0.8125rem; }
+.kaio-source-select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.kaio-source-select-row .kaio-select { flex: 1; min-width: 0; }
+.kaio-source-select-row .kaio-folder-edit-btn { font-size: 0.875rem; padding: 0.25rem; }
 .kaio-select {
   width: 100%;
   padding: 0.5rem 0.625rem;
@@ -388,6 +410,44 @@
   color: var(--primary, #a78bfa);
   border-color: var(--primary, #a78bfa);
   background: var(--accent, #25252e);
+}
+.kaio-add-section-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin-top: 0.25rem;
+  background: var(--card, #0f0f15);
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.5rem;
+  padding: 0.25rem 0;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+.kaio-add-section-item {
+  display: block;
+  width: 100%;
+  padding: 0.4375rem 0.75rem;
+  font-size: 0.6875rem;
+  font-family: inherit;
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.kaio-add-section-item:hover { background: var(--accent, #25252e); }
+.kaio-add-section-divider {
+  padding: 0.375rem 0.75rem 0.25rem;
+  font-size: 0.5625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary, #a78bfa);
+  pointer-events: none;
 }
 
 /* ─── Folder entries list (inspector) ─────────── */
@@ -1150,6 +1210,314 @@
   color: #fed7aa;
 }
 
+/* ─── Collapsible containers ────────────────── */
+.kaio-collapsible {
+  margin-bottom: 0.625rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--border, #27272a);
+}
+.kaio-collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  width: 100%;
+  padding: 0.375rem 0.125rem 0.5rem;
+  margin-bottom: 0.375rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border, #27272a);
+  color: var(--primary, #a78bfa);
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.kaio-collapsible-header:hover { color: var(--foreground); }
+.kaio-collapsible-caret {
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 0.6875rem;
+}
+.kaio-collapsible[data-collapsed="true"] .kaio-collapsible-caret {
+  transform: rotate(-90deg);
+}
+.kaio-collapsible-title { flex: 1; }
+.kaio-collapsible-count {
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--primary, #a78bfa);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  font-size: 0.5625rem;
+  font-weight: 700;
+}
+.kaio-collapsible-body {
+  padding: 0;
+}
+.kaio-collapsible[data-collapsed="true"] .kaio-collapsible-body { display: none; }
+.kaio-collapsible[data-collapsed="true"] {
+  padding-bottom: 0;
+  border-bottom: 0;
+  margin-bottom: 0.5rem;
+}
+
+/* ─── Preset editor panel ──────────────────── */
+.kaio-preset-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.kaio-preset-stats {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.kaio-preset-stat {
+  flex: 1;
+  text-align: center;
+  padding: 0.625rem;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.5rem;
+  background: var(--card, #0f0f15);
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+.kaio-preset-stat strong {
+  display: block;
+  font-size: 1.125rem;
+  color: var(--foreground);
+  margin-bottom: 0.125rem;
+}
+.kaio-wrap-btn[data-active="true"] {
+  border-color: var(--primary, #a78bfa);
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--primary, #a78bfa);
+}
+.kaio-wrap-icon {
+  font-size: 0.625rem;
+  font-weight: 700;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ─── Group badge (simulated prompt + section list) ─── */
+.kaio-group-badge {
+  font-size: 0.5625rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.18);
+  color: #34d399;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+/* ─── Preset section list (in Sections collapsible) ─── */
+.kaio-preset-section-list {
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--card, #0f0f15);
+  margin-top: 0.375rem;
+}
+.kaio-preset-section-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  font-size: 0.6875rem;
+  cursor: grab;
+  transition: background 0.15s;
+  user-select: none;
+}
+.kaio-preset-section-row:last-child { border-bottom: 0; }
+.kaio-preset-section-row:hover { background: var(--accent, #25252e); }
+.kaio-preset-section-row[data-dragging="true"] { opacity: 0.4; }
+.kaio-preset-section-row[data-dragover="true"] {
+  border-top: 2px solid var(--primary, #a78bfa);
+}
+.kaio-drag-handle {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  cursor: grab;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.kaio-preset-section-row:hover .kaio-drag-handle { opacity: 1; }
+.kaio-preset-section-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-weight: 500;
+}
+.kaio-preset-section-role {
+  font-size: 0.5625rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+  flex-shrink: 0;
+}
+.kaio-preset-section-delete {
+  background: transparent;
+  border: 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+  transition: color 0.15s;
+  line-height: 1;
+  opacity: 0.5;
+}
+.kaio-preset-section-delete:hover {
+  color: #f87171;
+  opacity: 1;
+}
+
+/* ─── Preset group rows (in Sections collapsible) ─── */
+.kaio-preset-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.375rem;
+}
+.kaio-preset-group-row {
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--card, #0f0f15);
+  overflow: hidden;
+}
+.kaio-preset-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.kaio-preset-group-header:hover { background: var(--accent, #25252e); }
+.kaio-group-caret {
+  font-size: 0.625rem;
+  flex-shrink: 0;
+}
+.kaio-group-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.1875rem 0.375rem;
+  font-size: 0.6875rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  color: var(--foreground);
+  font-weight: 600;
+  font-family: inherit;
+}
+.kaio-group-name-input:focus {
+  background: var(--secondary, #1c1c25);
+  border-color: var(--primary, #a78bfa);
+  outline: none;
+}
+.kaio-group-batch-body {
+  padding: 0.5rem;
+  border-top: 1px solid var(--border, #27272a);
+}
+
+/* ─── Preset variable rows (in Variables collapsible) ─── */
+.kaio-preset-var-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.kaio-preset-var-row {
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--card, #0f0f15);
+  overflow: hidden;
+}
+.kaio-preset-var-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.4375rem 0.5rem;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.kaio-preset-var-header:hover { background: var(--accent, #25252e); }
+.kaio-preset-var-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fbbf24;
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.kaio-preset-var-name {
+  font-weight: 600;
+  color: var(--foreground);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kaio-preset-var-macro {
+  font-size: 0.5625rem;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  flex-shrink: 0;
+}
+.kaio-preset-var-body {
+  padding: 0.625rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--border, #27272a);
+}
+.kaio-preset-var-body .kaio-field { margin-bottom: 0.375rem; }
+.kaio-preset-var-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.kaio-preset-var-opt-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: 0.25rem;
+  align-items: center;
+}
+.kaio-preset-var-opt-row .kaio-input {
+  padding: 0.3125rem 0.5rem;
+  font-size: 0.6875rem;
+}
+.kaio-preset-var-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.625rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #27272a);
+}
+
+/* ─── Drag-and-drop in simulated prompt ────── */
+.kaio-block[data-dragging="true"] {
+  opacity: 0.35;
+}
+.kaio-block[data-dragover="true"] {
+  border-top: 2px solid var(--primary, #a78bfa);
+  margin-top: -1px;
+}
+.kaio-block[draggable="true"] {
+  cursor: grab;
+}
+.kaio-block[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 /* ─── Mobile tab bar (hidden on desktop) ───── */
 .kaio-mobile-tabs {
   display: none;
@@ -1157,6 +1525,7 @@
 
 /* ─── Responsive: phones & small tablets ───── */
 @media (max-width: 768px) {
+  .kaio-tab-btn { display: none; }
   .kaio-shell {
     width: 100vw;
     height: 100vh;
