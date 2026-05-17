@@ -2,6 +2,19 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.6.0] — 2026-05-17
+
+Lorebook overview editing from the Inspector, plus layout refinements to the Simulated Prompt and preset Sections panel.
+
+### Added
+
+- **Lorebook Editor in the Inspector.** A ✏️ button next to each selected lorebook dropdown opens an Overview panel with editable fields for name, description, tags (comma-separated), category (World / Character / NPC / Spellbook / Uncategorized as a button group), scan depth, token budget, recursive scanning, enabled, and global. Uses the standard Save / Revert draft flow; saves write back via `PATCH /api/lorebooks/:id`.
+
+### Changed
+
+- **Group badge pushed to the far right in the Simulated Prompt.** The green group-name pill now sits at the far-right edge of the block header, vertically aligned with the `ORDER N` badge on lorebook entries, instead of appearing between the block name and the role label.
+- **Preset Sections panel reordered.** Inside the Sections collapsible, Groups now appear at the top, followed by the Section Order list, with the `+ Section` button moved to the bottom below the section list.
+
 ## [1.5.0] — 2026-05-16
 
 Preset editing from the Inspector — sections, groups, variables, and drag-and-drop reordering without leaving the AIO console.
@@ -13,7 +26,7 @@ Preset editing from the Inspector — sections, groups, variables, and drag-and-
   - **Sections** — create new sections or markers from a type dropdown (Prompt Block, Character Info, Lorebook All/Before/After, Persona, Chat History, Chat Summary, Dialogue Examples), delete sections, and drag-and-drop to reorder. Includes group management with create / rename / delete and batch-add sections to groups (same pattern as lorebook folder batch-add).
   - **Preset Variables** — create, delete, and edit variables inline: variable name, question, options list with add / remove, multi-select toggle, separator, and random-pick toggle.
 - **Group dropdown on section Inspector.** When editing a section, a Group dropdown lets you assign it to a group manually.
-- **Group badge in Simulated Prompt.** Sections and markers belonging to a group display a green pill badge with the group name, left of the role label.
+- **Group badge in Simulated Prompt.** Sections and markers belonging to a group display a green pill badge with the group name.
 - **Drag-and-drop reordering in Simulated Prompt.** Sections, markers, and chat-history blocks can be dragged to reorder. The new order is saved to the preset's `sectionOrder` via `PUT /sections/reorder`.
 - **Collapsible lorebook entry sections.** The lorebook entry Inspector fields are now organized into seven collapsible sections (Basic, Matching options, Context filters, Additional matching sources, Timing, Group & Tag, Advanced). Basic starts expanded; the rest start collapsed to reduce scrolling.
 - **Extension-card launch button.** A 🥞 button is injected into the extension's own card in Settings → Extensions, providing an alternate way to open the console — especially useful on mobile where the toolbar icon is hidden.

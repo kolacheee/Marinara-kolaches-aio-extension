@@ -93,6 +93,7 @@ const state = {
 
   // Collapsible states for inspector sections
   presetEditorCollapsed: { overview: false, sections: false, variables: false },
+  lbEditorCollapsed: { overview: false },
   lbInspectorCollapsed: { basic: false, matching: true, contextFilters: true, matchingSources: true, timing: true, groupTag: true, advanced: true },
   presetGroupBatchAdd: { groupId: null, selected: new Set() },
   // Which variable is expanded in the preset variables panel (null = none)
@@ -551,6 +552,19 @@ function renderLeft() {
       renderAll();
     });
     rowHeader.appendChild(sel);
+    if (currentId) {
+      const lbEditBtn = document.createElement("button");
+      lbEditBtn.type = "button";
+      lbEditBtn.className = "kaio-folder-edit-btn";
+      lbEditBtn.innerHTML = "✏️";
+      lbEditBtn.title = "Edit lorebook properties";
+      lbEditBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const lb = state.lorebooks.find((l) => l.id === currentId);
+        if (lb) inspectBlock({ kind: "lorebook-editor", id: "lorebook-editor-" + currentId, lorebook: lb });
+      });
+      rowHeader.appendChild(lbEditBtn);
+    }
     row.appendChild(rowHeader);
 
     // Entry checklist only under the active lorebook.
@@ -1599,8 +1613,8 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
   head.innerHTML = `
     <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
-    ${groupHTML}
     ${hintHTML}
+    ${groupHTML}
     ${orderHTML}
     ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
     ${depthLabel}
@@ -1870,6 +1884,27 @@ function makeDraft(block) {
           },
         };
       }
+    case "lorebook-editor":
+      {
+        const lb = block.lorebook;
+        if (!lb) return null;
+        const arrCSV = (a) => Array.isArray(a) ? a.join(", ") : "";
+        return {
+          kind: "lorebook-editor",
+          sourceId: lb.id,
+          fields: {
+            name: lb.name || "",
+            description: lb.description || "",
+            tags: arrCSV(lb.tags),
+            category: lb.category || "uncategorized",
+            enabled: lb.enabled !== false,
+            isGlobal: !!lb.isGlobal,
+            scanDepth: lb.scanDepth ?? 2,
+            tokenBudget: lb.tokenBudget ?? 2048,
+            recursiveScanning: !!lb.recursiveScanning,
+          },
+        };
+      }
     default:
       return null;
   }
@@ -2093,6 +2128,10 @@ function renderRight() {
 
     case "preset-editor":
       rightBodyEl.appendChild(renderPresetEditorPanel());
+      break;
+
+    case "lorebook-editor":
+      rightBodyEl.appendChild(renderLorebookEditorPanel());
       break;
 
     case "folder":
@@ -2729,7 +2768,7 @@ function onFieldChange(key, value) {
   // rendered, so re-render the whole inspector when it changes. Other fields
   // can patch the footer in place to preserve focus / caret.
   if ((state.draft.kind === "section" && key === "injectionPosition") ||
-      key === "matchingMode" || key === "wrapFormat") {
+      key === "matchingMode" || key === "wrapFormat" || key === "category") {
     renderRight();
     return;
   }
@@ -2846,10 +2885,40 @@ async function saveDraft() {
         };
         await api("PATCH", "/prompts/" + presetId, body);
         await loadPresetFull(presetId);
-        // Update the presets list so the name is reflected in the picker
         state.presets = await api("GET", "/prompts/").catch(() => state.presets);
         state.inspecting = { kind: "preset-editor", id: "preset-editor" };
         state.draft = makeDraft(state.inspecting);
+        state.isDirty = false;
+        renderAll();
+        showToast("Saved ✓", "success");
+        return;
+      }
+      case "lorebook-editor": {
+        const lbId = d.sourceId;
+        const tagsArr = typeof d.fields.tags === "string"
+          ? d.fields.tags.split(",").map((t) => t.trim()).filter(Boolean)
+          : [];
+        const body = {
+          name: d.fields.name,
+          description: d.fields.description,
+          tags: tagsArr,
+          category: d.fields.category,
+          enabled: d.fields.enabled,
+          isGlobal: d.fields.isGlobal,
+          scanDepth: Number(d.fields.scanDepth),
+          tokenBudget: Number(d.fields.tokenBudget),
+          recursiveScanning: d.fields.recursiveScanning,
+        };
+        await api("PATCH", "/lorebooks/" + lbId, body);
+        state.lorebooks = await api("GET", "/lorebooks").catch(() => state.lorebooks);
+        const freshLb = state.lorebooks.find((l) => l.id === lbId);
+        if (freshLb) {
+          state.inspecting = { kind: "lorebook-editor", id: "lorebook-editor-" + lbId, lorebook: freshLb };
+          state.draft = makeDraft(state.inspecting);
+        } else {
+          state.inspecting = null;
+          state.draft = null;
+        }
         state.isDirty = false;
         renderAll();
         showToast("Saved ✓", "success");
@@ -2987,6 +3056,73 @@ function showToast(msg, kind) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { toastEl.dataset.visible = "false"; }, 1800);
 }
+// ── Lorebook editor panel ─────────────────────────────────────
+function renderLorebookEditorPanel() {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-preset-editor";
+  const lb = state.inspecting && state.inspecting.lorebook;
+  if (!lb) return wrap;
+  const f = state.draft && state.draft.fields;
+
+  wrap.appendChild(renderCollapsible("Overview", "overview", () => {
+    const content = document.createElement("div");
+    if (!f) return content;
+    content.appendChild(field("Name", f.name, "name", "input"));
+    content.appendChild(field("Description", f.description, "description", "textarea",
+      "Brief description of this lorebook.", 3));
+    content.appendChild(field("Tags", f.tags, "tags", "input",
+      "Comma-separated tags for organizing lorebooks."));
+    content.appendChild(lorebookCategoryField(f.category));
+    content.appendChild(rowOf(
+      numberField("Scan Depth", f.scanDepth, "scanDepth",
+        "How many messages back to scan for keyword matches. Entries can override this."),
+      numberField("Token Budget", f.tokenBudget, "tokenBudget",
+        "Maximum tokens allocated to this lorebook's injected entries."),
+    ));
+    content.appendChild(checkboxField("Recursive", f.recursiveScanning, "recursiveScanning",
+      "When enabled, activated entries are re-scanned for keywords that may trigger additional entries."));
+    content.appendChild(checkboxField("Enabled", f.enabled, "enabled",
+      "Master switch — when off, no entries from this lorebook will activate."));
+    content.appendChild(checkboxField("Global", f.isGlobal, "isGlobal",
+      "When on, this lorebook is active in every chat regardless of linked characters or personas."));
+    return content;
+  }, { stateObj: state.lbEditorCollapsed }));
+
+  return wrap;
+}
+
+function lorebookCategoryField(value) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, "Category");
+  wrap.appendChild(lab);
+  const row = document.createElement("div");
+  row.className = "kaio-match-mode";
+  for (const [val, label, icon] of [
+    ["world", "World", "🌐"],
+    ["character", "Character", "👥"],
+    ["npc", "NPC", "👤"],
+    ["spellbook", "Spellbook", "✨"],
+    ["uncategorized", "Uncategorized", "🗂️"],
+  ]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kaio-match-btn kaio-wrap-btn";
+    btn.dataset.active = String(value === val);
+    const iconEl = document.createElement("span");
+    iconEl.style.marginRight = "0.25rem";
+    iconEl.textContent = icon;
+    btn.appendChild(iconEl);
+    btn.appendChild(document.createTextNode(label));
+    btn.addEventListener("click", () => onFieldChange("category", val));
+    row.appendChild(btn);
+  }
+  wrap.appendChild(row);
+  return wrap;
+}
+
 // ── Preset editor panel (3 collapsibles: Overview / Sections / Variables) ──
 function renderPresetEditorPanel() {
   const wrap = document.createElement("div");
@@ -3145,9 +3281,8 @@ function renderPresetSectionsPanel() {
     setTimeout(() => document.addEventListener("click", dismiss, true), 0);
   });
   actions.appendChild(addBtn);
-  wrap.appendChild(actions);
 
-  // Groups management
+  // Groups management (above section order)
   wrap.appendChild(renderPresetGroupsUI(presetId, groups, sections));
 
   // Section order list
@@ -3157,6 +3292,7 @@ function renderPresetSectionsPanel() {
     empty.className = "kaio-field-help";
     empty.textContent = "No sections in this preset yet.";
     wrap.appendChild(empty);
+    wrap.appendChild(actions);
     return wrap;
   }
 
@@ -3253,6 +3389,8 @@ function renderPresetSectionsPanel() {
     list.appendChild(row);
   }
   wrap.appendChild(list);
+  // + Section button below the section list
+  wrap.appendChild(actions);
   return wrap;
 }
 

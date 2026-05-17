@@ -261,7 +261,12 @@
 }
 .kaio-lb-rowhead {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
+.kaio-lb-rowhead .kaio-select { flex: 1; min-width: 0; }
+.kaio-lb-rowhead .kaio-folder-edit-btn { font-size: 0.875rem; padding: 0.25rem; }
 
 /* lorebook entry checklist */
 .kaio-entrylist {
@@ -1313,6 +1318,11 @@
   letter-spacing: 0.04em;
   font-weight: 600;
 }
+/* In block heads, push the group badge to the far right (same position as order) */
+.kaio-block-head .kaio-group-badge { margin-left: auto; }
+/* When order or role follows the group badge, they no longer need their own auto margin */
+.kaio-block-head .kaio-group-badge ~ .kaio-block-order { margin-left: 0.375rem; }
+.kaio-block-head .kaio-group-badge ~ .kaio-block-role { margin-left: 0.375rem; }
 
 /* ─── Preset section list (in Sections collapsible) ─── */
 .kaio-preset-section-list {
@@ -1598,4 +1608,5 @@
   }
   .kaio-block-role { display: none; }
   .kaio-block-order { margin-left: auto; }
+  .kaio-block-head .kaio-group-badge { margin-left: auto; }
 }
