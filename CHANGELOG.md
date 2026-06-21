@@ -2,6 +2,19 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.8.0] — 2026-06-22
+
+Adds a **Prompt Inspector** — capture the entire prompt as it would be sent to your LLM.
+
+### Added
+
+- **🔍 Prompt Inspector.** A new button in the console titlebar (next to *Reload*) opens a modal showing the full assembled prompt as a list of role-tagged messages (System / User / Assistant), colour-coded by role.
+  - **With a chat open**, it asks whether to **include** the active chat history (fit to the preset's context limit) or **omit** it. *Include* captures the engine's exact prompt via Marinara 2.0.0's dry-run preview (`POST /api/generate/dryRun`), including the model, context size, and wrap format. *Omit* shows the structural preview from your current console selection with a `{{chat_history}}` placeholder.
+  - **With no chat open**, it skips the prompt and shows the structural preview directly.
+  - **Depth-injected** sections and lorebook entries are stacked by depth around the chat-history placeholder (higher depth first), mirroring how they assemble at runtime.
+  - **Visible line-breaks toggle** (`¶`) renders a marker at each newline; the choice is remembered across opens. A **Copy** button copies the whole prompt as text.
+  - Multimodal turns are annotated with image/file counts in the live capture.
+
 ## [1.7.0] — 2026-06-22
 
 Compatibility pass for **Marinara Engine 2.0.0**, plus Simulated Prompt visual enhancements and a disabled-section fix.

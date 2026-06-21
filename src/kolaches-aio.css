@@ -1659,3 +1659,123 @@
   .kaio-block-head .kaio-group-badge { margin-left: auto; }
   .kaio-block-head .kaio-folder-badge { margin-left: auto; }
 }
+
+/* ─── Prompt Inspector modal ─────────────────── */
+.kaio-pi-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 8;
+  padding: 1.5rem;
+}
+.kaio-pi-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  height: min(86%, 100%);
+  background: var(--card, #0f0f15);
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.75rem;
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.kaio-pi-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  background: var(--card, #0f0f15);
+}
+.kaio-pi-head .kaio-spacer { flex: 1 1 0; min-width: 0; }
+.kaio-pi-title { font-size: 0.8125rem; font-weight: 600; white-space: nowrap; }
+.kaio-pi-badge {
+  font-size: 0.625rem;
+  color: var(--muted-foreground);
+  padding: 0.125rem 0.4375rem;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42%;
+}
+.kaio-pi-badge[data-mode="live"] {
+  color: var(--primary, #a78bfa);
+  border-color: var(--primary, #a78bfa);
+}
+.kaio-pi-head .kaio-btn[data-active="true"] {
+  background: var(--primary, #a78bfa);
+  color: var(--primary-foreground, #0f0f15);
+  border-color: transparent;
+}
+.kaio-pi-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.kaio-pi-empty {
+  margin: auto;
+  max-width: 26rem;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.kaio-pi-msg {
+  border: 1px solid var(--border, #27272a);
+  border-left-width: 3px;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: var(--background, rgba(0, 0, 0, 0.2));
+}
+.kaio-pi-msg[data-role="system"]    { border-left-color: #60a5fa; }
+.kaio-pi-msg[data-role="user"]      { border-left-color: #34d399; }
+.kaio-pi-msg[data-role="assistant"] { border-left-color: #fbbf24; }
+.kaio-pi-msg[data-depth="true"]     { border-left-style: dashed; }
+.kaio-pi-msg[data-placeholder="true"] {
+  border-style: dashed;
+  opacity: 0.85;
+}
+.kaio-pi-msg-role {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  padding: 0.3125rem 0.625rem;
+  border-bottom: 1px solid var(--border, #27272a);
+  background: var(--card, #0f0f15);
+}
+.kaio-pi-pre {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--foreground);
+}
+.kaio-pi-msg[data-placeholder="true"] .kaio-pi-pre { color: var(--muted-foreground); }
+
+@media (max-width: 768px) {
+  .kaio-pi-bg { padding: 0; }
+  .kaio-pi-modal { width: 100%; height: 100%; border-radius: 0; }
+  /* Title shrinks/ellipsizes so the Copy + close controls stay reachable. */
+  .kaio-pi-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .kaio-pi-badge { order: 5; max-width: 100%; flex-basis: 100%; }
+}

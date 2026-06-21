@@ -254,6 +254,7 @@ function buildConsole() {
         <span class="kaio-title">kolache's AIO</span>
         <span class="kaio-subtitle">Prompt Viewer &amp; Editor</span>
         <span class="kaio-spacer"></span>
+        <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍 Inspect</button>
         <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
         <button class="kaio-iconbtn" data-action="close" title="Close (Esc)">✕</button>
       </div>
@@ -332,6 +333,7 @@ function buildConsole() {
     renderAll();
     showToast("Reloaded", "success");
   });
+  overlayEl.querySelector('[data-action="inspect"]').addEventListener("click", () => openPromptInspector());
   overlayEl.querySelector('[data-action="validate"]').addEventListener(
     "click",
     runValidation,
@@ -375,7 +377,15 @@ function attemptClose() {
   closeConsoleNow();
 }
 function closeConsoleNow() {
-  if (overlayEl) overlayEl.dataset.open = "false";
+  if (overlayEl) {
+    // Tear down any open Prompt Inspector modal / Include-Omit dialog so their
+    // document-level keydown listeners don't leak past the console closing.
+    overlayEl.querySelectorAll(".kaio-pi-bg, .kaio-confirm-bg").forEach((el) => {
+      if (typeof el._kaioClose === "function") el._kaioClose();
+      else el.remove();
+    });
+    overlayEl.dataset.open = "false";
+  }
   hideTip();
 }
 
@@ -4064,7 +4074,295 @@ function escapeHTML(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
-console.log("[kolache-AIO] v1.7.0 loaded — Marinara Engine 2.0.0 (REST /api)");
+
+// ── Prompt Inspector ────────────────────────────────────────────
+// Captures the entire prompt for the active chat as it would be sent to the
+// API (via the engine's dry-run preview), or a structural preview of the
+// console's current selection when history is omitted or no chat is open.
+
+// The Marinara client persists the open chat's id to localStorage as a bare
+// string; the key is removed when no chat is open.
+function getActiveChatId() {
+  try {
+    const id = localStorage.getItem("marinara-active-chat-id");
+    return id && id.trim() ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Plain-text variant of blockPreviewHTML's variable substitution — no HTML,
+// no <mark>. Non-variable macros ({{char}}, {{user}}, …) are left untouched.
+function substituteVars(text, subs) {
+  if (!text || !subs.length) return text || "";
+  const pattern = subs
+    .map((s) => `\\{\\{(?:getvar::)?${escapeRegex(s.name)}\\}\\}`)
+    .join("|");
+  const re = new RegExp(pattern, "gi");
+  return text.replace(re, (mm) => {
+    const name = mm.slice(2, -2).replace(/^getvar::/i, "");
+    const sub = subs.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    return sub ? sub.value : "";
+  });
+}
+
+// Serialize the console's current selection (the Simulated Prompt assembly)
+// into a flat, role-tagged message list with a {{chat_history}} placeholder
+// and depth-injected blocks stacked around it (higher depth first, mirroring
+// the Simulated Prompt column). Used for "omit history" and the no-chat case.
+function buildPromptMessagesFromSimulation() {
+  const blocks = buildSimulatedPrompt();
+  const subs = activeVariableSubs();
+  const out = [];
+  const roleOf = (b) =>
+    (b.section && b.section.role) || (b.entry && b.entry.role) || "system";
+  const textOf = (b) => substituteVars(blockPreviewRaw(b), subs);
+
+  for (const b of blocks) {
+    if (b.kind === "chat-history") {
+      const depth = [
+        ...(b.depthSections || []).map((s) => ({
+          role: s.role || "system",
+          content: textOf({ kind: "section", section: s }),
+          depth: s.injectionDepth ?? 0,
+        })),
+        ...(b.depthEntries || []).map((e) => ({
+          role: e.role || "system",
+          content: textOf({ kind: "lorebook-entry", entry: e }),
+          depth: e.depth ?? 0,
+        })),
+      ].sort((x, y) => (y.depth ?? 0) - (x.depth ?? 0));
+      for (const d of depth) {
+        if (d.content) out.push({ role: d.role, content: d.content, depthInjection: true, depth: d.depth });
+      }
+      out.push({ role: "system", content: "{{chat_history}}", historyPlaceholder: true });
+      continue;
+    }
+    if (b.kind === "marker") continue; // runtime-only placeholder, no content
+    const content = textOf(b);
+    if (!content) continue;
+    out.push({ role: roleOf(b), content });
+  }
+  return out;
+}
+
+// Capture the exact prompt the engine would send for a chat, via the dry-run
+// preview endpoint. Returns { messages, meta }. CSRF is added by Marinara's
+// global fetch shim (same path as every other api() call).
+async function dryRunPrompt(chatId) {
+  const data = await api("POST", "/generate/dryRun", { chatId, returnPrompt: true });
+  const msgs = (data && data.prompt && data.prompt.messages) || [];
+  const p = (data && data.parameters) || {};
+  return {
+    messages: msgs.map((m) => ({
+      role: m.role,
+      content: m.content || "",
+      images: Array.isArray(m.images) ? m.images.length : 0,
+      files: Array.isArray(m.files) ? m.files.length : 0,
+    })),
+    meta: {
+      mode: "live",
+      wrapFormat: data && data.prompt && data.prompt.wrapFormat,
+      provider: p.provider,
+      model: p.model,
+      maxContext: p.maxContext,
+    },
+  };
+}
+
+// Include / Omit history dialog (only shown when a chat is open).
+// Resolves "include" | "omit" | null (cancel).
+function askIncludeHistory() {
+  return new Promise((resolve) => {
+    const bg = document.createElement("div");
+    bg.className = "kaio-confirm-bg";
+    bg.innerHTML =
+      '<div class="kaio-confirm">' +
+      '<div class="kaio-confirm-title">Inspect prompt</div>' +
+      "<div class=\"kaio-confirm-msg\">A chat is open. Include its chat history (fit to the preset's context limit) in the captured prompt, or omit it and show a placeholder instead?</div>" +
+      '<div class="kaio-confirm-actions">' +
+      '<button class="kaio-btn kaio-btn-ghost" data-act="cancel">Cancel</button>' +
+      '<button class="kaio-btn" data-act="omit">Omit history</button>' +
+      '<button class="kaio-btn kaio-btn-primary" data-act="include">Include history</button>' +
+      "</div></div>";
+    overlayEl.querySelector(".kaio-shell").appendChild(bg);
+    let onKey;
+    const done = (v) => {
+      document.removeEventListener("keydown", onKey, true);
+      bg.remove();
+      resolve(v);
+    };
+    // Capture-phase Esc resolves to cancel and stops the console's own Esc
+    // handler from firing (which would close the whole console under us).
+    onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); done(null); } };
+    bg._kaioClose = () => done(null);
+    document.addEventListener("keydown", onKey, true);
+    bg.querySelector('[data-act="cancel"]').addEventListener("click", () => done(null));
+    bg.querySelector('[data-act="omit"]').addEventListener("click", () => done("omit"));
+    bg.querySelector('[data-act="include"]').addEventListener("click", () => done("include"));
+    bg.addEventListener("click", (e) => { if (e.target === bg) done(null); });
+  });
+}
+
+let piBusy = false;
+async function openPromptInspector() {
+  if (piBusy) return; // ignore re-entrant clicks while a dialog/capture is pending
+  piBusy = true;
+  try {
+    const chatId = getActiveChatId();
+    let messages, meta;
+    if (chatId) {
+      const choice = await askIncludeHistory();
+      if (!choice) return;
+      if (choice === "include") {
+        showToast("Capturing prompt…", "info");
+        try {
+          const res = await dryRunPrompt(chatId);
+          messages = res.messages;
+          meta = res.meta;
+        } catch (e) {
+          console.error("[kolache-AIO] dryRun failed", e);
+          showToast("Couldn't capture live prompt — see console", "error");
+          return;
+        }
+      } else {
+        messages = buildPromptMessagesFromSimulation();
+        meta = { mode: "structural" };
+      }
+    } else {
+      messages = buildPromptMessagesFromSimulation();
+      meta = { mode: "structural" };
+    }
+    showPromptInspectorModal(messages, meta);
+  } finally {
+    piBusy = false;
+  }
+}
+
+// Visible-line-break preference, persisted across opens.
+function piShowBreaks() {
+  try { return localStorage.getItem("kaio-pi-breaks") === "1"; } catch { return false; }
+}
+function setPiShowBreaks(v) {
+  try { localStorage.setItem("kaio-pi-breaks", v ? "1" : "0"); } catch { /* ignore */ }
+}
+function piRoleLabel(role) {
+  if (role === "user") return "User";
+  if (role === "assistant") return "Assistant";
+  return "System";
+}
+
+function showPromptInspectorModal(messages, meta) {
+  const shell = overlayEl && overlayEl.querySelector(".kaio-shell");
+  if (!shell) return;
+  const prev = shell.querySelector(".kaio-pi-bg");
+  if (prev) { if (typeof prev._kaioClose === "function") prev._kaioClose(); else prev.remove(); }
+
+  const bg = document.createElement("div");
+  bg.className = "kaio-pi-bg";
+  bg.innerHTML = `
+    <div class="kaio-pi-modal" role="dialog" aria-label="Prompt Inspector">
+      <div class="kaio-pi-head">
+        <span class="kaio-pi-title">🔍 Prompt Inspector</span>
+        <span class="kaio-pi-badge"></span>
+        <span class="kaio-spacer"></span>
+        <button class="kaio-btn kaio-btn-ghost" data-pi="breaks" title="Toggle visible line breaks">¶ Line breaks</button>
+        <button class="kaio-btn" data-pi="copy" title="Copy the full prompt">Copy</button>
+        <button class="kaio-iconbtn" data-pi="close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="kaio-pi-body"></div>
+    </div>`;
+  shell.appendChild(bg);
+
+  const badge = bg.querySelector(".kaio-pi-badge");
+  if (meta.mode === "live") {
+    const bits = [];
+    if (meta.provider || meta.model) bits.push(`${meta.provider ? meta.provider + "/" : ""}${meta.model || ""}`);
+    if (meta.maxContext) bits.push(`ctx ${meta.maxContext}`);
+    if (meta.wrapFormat) bits.push(meta.wrapFormat);
+    badge.textContent = "Live · " + bits.join(" · ");
+    badge.dataset.mode = "live";
+  } else {
+    badge.textContent = "Structural preview · console selection";
+    badge.dataset.mode = "structural";
+  }
+
+  const body = bg.querySelector(".kaio-pi-body");
+  const breaksBtn = bg.querySelector('[data-pi="breaks"]');
+
+  function renderBody() {
+    const show = piShowBreaks();
+    breaksBtn.dataset.active = show ? "true" : "";
+    body.innerHTML = "";
+    if (!messages.length) {
+      const empty = document.createElement("div");
+      empty.className = "kaio-pi-empty";
+      empty.textContent = meta.mode === "structural"
+        ? "Nothing to preview yet — open Sources and pick a preset (plus optional character, persona, and lorebook entries) to see its assembled structure."
+        : "The engine returned an empty prompt.";
+      body.appendChild(empty);
+      return;
+    }
+    for (const m of messages) {
+      const blk = document.createElement("div");
+      blk.className = "kaio-pi-msg";
+      blk.dataset.role = m.role || "system";
+      if (m.historyPlaceholder) blk.dataset.placeholder = "true";
+      if (m.depthInjection) blk.dataset.depth = "true";
+
+      const label = document.createElement("div");
+      label.className = "kaio-pi-msg-role";
+      let labelText = m.historyPlaceholder
+        ? "Chat history"
+        : piRoleLabel(m.role) + (m.depthInjection ? " · depth " + (m.depth ?? 0) : "");
+      const att = [];
+      if (m.images) att.push(m.images + " img");
+      if (m.files) att.push(m.files + " file");
+      if (att.length) labelText += " · " + att.join(", ");
+      label.textContent = labelText;
+
+      const pre = document.createElement("pre");
+      pre.className = "kaio-pi-pre";
+      const content = m.content || "";
+      pre.textContent = show ? content.replace(/\n/g, "↵\n") : content;
+
+      blk.appendChild(label);
+      blk.appendChild(pre);
+      body.appendChild(blk);
+    }
+  }
+  renderBody();
+
+  breaksBtn.addEventListener("click", () => { setPiShowBreaks(!piShowBreaks()); renderBody(); });
+  bg.querySelector('[data-pi="copy"]').addEventListener("click", async () => {
+    const text = messages.map((m) => {
+      const head = m.historyPlaceholder
+        ? "### Chat history"
+        : "### " + piRoleLabel(m.role) + (m.depthInjection ? " (depth " + (m.depth ?? 0) + ")" : "");
+      return head + "\n" + (m.content || "");
+    }).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Prompt copied", "success");
+    } catch {
+      showToast("Copy failed — clipboard unavailable", "error");
+    }
+  });
+
+  function onPiKey(e) {
+    if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close(); }
+  }
+  function close() {
+    document.removeEventListener("keydown", onPiKey, true);
+    bg.remove();
+  }
+  bg._kaioClose = close; // let closeConsoleNow tear this down cleanly
+  document.addEventListener("keydown", onPiKey, true);
+  bg.querySelector('[data-pi="close"]').addEventListener("click", close);
+  bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
+}
+
+console.log("[kolache-AIO] v1.8.0 loaded — Marinara Engine 2.0.0 (REST /api)");
 injectTopbarButton();
 tryInjectExtensionLauncher();
 marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });

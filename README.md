@@ -16,6 +16,15 @@ When you toggle the extension on, a 🥞 button appears in the top-right tab str
 
 **Mobile & tablet:** On screens ≤ 768px the three columns collapse into a single full-screen panel with a **Sources / Prompt / Inspector** tab bar. Tapping a block in the Prompt tab auto-switches to Inspector. The desktop layout is completely unaffected.
 
+### 🔍 Prompt Inspector
+
+The **Inspect** button in the console titlebar (next to *Reload*) captures the *entire* prompt as it would be sent to your LLM and shows it as a list of role-tagged messages (System / User / Assistant), colour-coded by role.
+
+- **With a chat open**, it asks whether to **include** that chat's history (fit to the preset's context limit) or **omit** it. *Include* pulls the engine's exact prompt via Marinara 2.0.0's dry-run preview — so what you see is literally what the model receives, including the resolved model, context size, and wrap format. *Omit* shows the structural preview built from your current console selection, with a `{{chat_history}}` placeholder.
+- **With no chat open**, it skips the question and shows the structural preview directly.
+- **Depth-injected** sections and lorebook entries are stacked by depth around the chat-history placeholder (higher depth first), matching how they assemble at runtime.
+- Toggle **¶ Line breaks** to mark every newline (handy for spotting stray or missing breaks); the choice is remembered. **Copy** grabs the whole prompt as text. Multimodal turns are annotated with image/file counts.
+
 For lorebook entries the inspector exposes every field the engine actually supports, organized into collapsible sections: **Basic** (name, content, description, primary keys, secondary keys, position, depth, order, role, enabled, matching mode — Normal / Selective / Constant as a 3-state orb selector, selective logic when Selective), **Matching options** (probability, scan depth, match-whole-words, case-sensitive, treat-as-regex), **Context filters** (character/tag/trigger filter modes + values), **Additional matching sources** (the seven scan targets), **Timing** (sticky / cooldown / delay / ephemeral), **Group & Tag** (group + group weight, tag, folder dropdown), **Advanced** (prevent-recursion, locked).
 
 For preset sections, the editor only shows **Depth** and **Order** when **Position** is set to `depth` — those fields don't do anything for `ordered` sections (which sequence by the preset's `sectionOrder`), so they're hidden to avoid implying otherwise.
@@ -82,6 +91,7 @@ Built against **Marinara Engine 2.0.0**. Data access is plain REST against the s
 - `DELETE /api/lorebooks/:id/folders/:folderId`
 - `GET  /api/characters` / `GET /api/characters/:id` / `PATCH /api/characters/:id`
 - `GET  /api/characters/personas/list` / `GET /api/characters/personas/:id` / `PATCH /api/characters/personas/:id`
+- `POST /api/generate/dryRun` (Prompt Inspector — `{ chatId, returnPrompt: true }` returns the assembled prompt without generating)
 
 Marinara 2.0.0 stores some boolean fields (e.g. a prompt section's `enabled`) as the strings `"true"`/`"false"`; the extension normalizes those on load so disabled sections render correctly.
 
