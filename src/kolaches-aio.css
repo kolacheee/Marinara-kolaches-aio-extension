@@ -1324,6 +1324,54 @@
 .kaio-block-head .kaio-group-badge ~ .kaio-block-order { margin-left: 0.375rem; }
 .kaio-block-head .kaio-group-badge ~ .kaio-block-role { margin-left: 0.375rem; }
 
+/* ─── Folder badge (lorebook entries nested in a folder) ─── */
+.kaio-folder-badge {
+  font-size: 0.5625rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.kaio-block-head .kaio-folder-badge { margin-left: auto; }
+.kaio-block-head .kaio-group-badge ~ .kaio-folder-badge { margin-left: 0.375rem; }
+.kaio-block-head .kaio-folder-badge ~ .kaio-block-order { margin-left: 0.375rem; }
+.kaio-block-head .kaio-folder-badge ~ .kaio-block-role { margin-left: 0.375rem; }
+
+/* ─── Disabled badge (disabled lorebook entries) ─── */
+.kaio-disabled-badge {
+  font-size: 0.5625rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  background: rgba(161, 161, 170, 0.18);
+  color: #a1a1aa;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+/* Disabled badge sits left of the role — push right if it's the first badge */
+.kaio-block-head .kaio-disabled-badge { margin-left: auto; }
+.kaio-block-head .kaio-group-badge ~ .kaio-disabled-badge,
+.kaio-block-head .kaio-folder-badge ~ .kaio-disabled-badge,
+.kaio-block-head .kaio-block-order ~ .kaio-disabled-badge { margin-left: 0.375rem; }
+/* When role follows disabled, collapse the role's auto margin */
+.kaio-block-head .kaio-disabled-badge ~ .kaio-block-role { margin-left: 0.375rem; }
+
+/* ─── Disabled entries: grayed out appearance ─── */
+.kaio-block[data-disabled="true"],
+.kaio-subblock[data-disabled="true"] {
+  opacity: 0.5;
+  border-style: dashed;
+}
+.kaio-block[data-disabled="true"]:hover,
+.kaio-subblock[data-disabled="true"]:hover {
+  opacity: 0.65;
+}
+
 /* ─── Preset section list (in Sections collapsible) ─── */
 .kaio-preset-section-list {
   border: 1px solid var(--border, #27272a);
@@ -1609,4 +1657,5 @@
   .kaio-block-role { display: none; }
   .kaio-block-order { margin-left: auto; }
   .kaio-block-head .kaio-group-badge { margin-left: auto; }
+  .kaio-block-head .kaio-folder-badge { margin-left: auto; }
 }

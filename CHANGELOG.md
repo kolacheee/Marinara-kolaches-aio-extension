@@ -2,6 +2,24 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.7.0] — 2026-06-22
+
+Compatibility pass for **Marinara Engine 2.0.0**, plus Simulated Prompt visual enhancements and a disabled-section fix.
+
+### Added
+
+- **Disabled entries visible in Simulated Prompt.** Disabled lorebook entries now appear in the Simulated Prompt when selected, rendered with reduced opacity and a dashed border to visually distinguish them from active entries. A `DISABLED` badge appears as the rightmost indicator on the block header (left of the role).
+- **Folder badge on lorebook entries.** Lorebook entries nested in a folder now display an amber folder-name badge in the Simulated Prompt block header, similar to how grouped preset sections display their group name.
+
+### Changed
+
+- **Lorebook entry "Advanced" fields merged into Basic.** *Prevent recursion* and *Locked* now sit in the Basic section of the entry inspector instead of a separate Advanced collapsible.
+- **Defensive field normalization.** `normalizeEntry` coerces `order` / `sortOrder` / `position` / `depth` to numbers, and `tryParseJSON` now passes through values that are already arrays/objects instead of discarding them — Marinara 2.0.0 returns fields like `sectionOrder` and `markerConfig` as real arrays/objects, not JSON strings.
+
+### Fixed
+
+- **Disabled prompt sections no longer render as enabled.** Marinara 2.0.0 persists prompt-section booleans as the strings `"true"` / `"false"`, so the strict `enabled !== false` check treated a disabled section (`"false"`) as enabled and still showed it in the simulation. A new `normalizeSection` pass coerces `enabled` / `isMarker` back to real booleans on load.
+
 ## [1.6.0] — 2026-05-17
 
 Lorebook overview editing from the Inspector, plus layout refinements to the Simulated Prompt and preset Sections panel.

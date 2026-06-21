@@ -12,7 +12,12 @@
 // `marinara` is supplied by the engine when the extension JS runs.
 // Available helpers we use: marinara.observe, marinara.onCleanup.
 
-// ── API helpers ────────────────────────────────────────────────
+// ── API layer ──────────────────────────────────────────────────
+// Marinara Engine 2.0.0 serves a same-origin REST API under /api and installs
+// a global fetch CSRF shim, so a plain fetch("/api/...") is all we need — the
+// shim adds the CSRF header to our POST/PATCH/PUT/DELETE calls automatically.
+// (We avoid marinara.apiFetch: it always calls res.json(), which throws on the
+// 204 No Content responses our DELETE / reorder calls rely on.)
 async function api(method, path, body) {
   const opts = {
     method,
@@ -30,6 +35,7 @@ async function api(method, path, body) {
 }
 
 const tryParseJSON = (s, fallback) => {
+  if (s !== null && s !== undefined && typeof s !== "string") return s;
   if (typeof s !== "string" || !s.length) return fallback;
   try { return JSON.parse(s); } catch { return fallback; }
 };
@@ -44,6 +50,33 @@ function normalizeCharacter(c) {
     return { ...c, data: tryParseJSON(c.data, {}) };
   }
   return c;
+}
+
+// Coerce lorebook entry fields that the extension compares with === to
+// numbers. Also applies Marinara's order/sortOrder fallback and defaults
+// missing position/depth/order so entries always have usable values.
+function normalizeEntry(e) {
+  if (!e || typeof e !== "object") return e;
+  // Marinara 2.0.0 uses `order`; fall back to `sortOrder` for older builds.
+  const rawOrder = e.order ?? e.sortOrder ?? 0;
+  e.order = Number(rawOrder) || 0;
+  e.position = Number(e.position ?? 0) || 0;
+  // NaN-safe: depth 0 is valid, so use explicit isNaN check
+  e.depth = isNaN(Number(e.depth)) ? 0 : Number(e.depth);
+  return e;
+}
+
+// Marinara 2.0.0 persists prompt-section booleans as the STRINGS "true"/"false"
+// (the server stringifies on write and never re-parses on read). Strict checks
+// like `section.enabled !== false` would treat the string "false" as enabled,
+// so a disabled section would wrongly render in the Simulated Prompt. Coerce the
+// booleans the extension compares back into real booleans. Idempotent — leaves
+// values that are already booleans untouched.
+function normalizeSection(s) {
+  if (!s || typeof s !== "object") return s;
+  if (typeof s.enabled === "string") s.enabled = s.enabled !== "false";
+  if (typeof s.isMarker === "string") s.isMarker = s.isMarker === "true";
+  return s;
 }
 
 // ── Global state ───────────────────────────────────────────────
@@ -365,15 +398,17 @@ async function loadAllSources() {
   }
 }
 async function loadPresetFull(id) {
-  state.presetFull = await api("GET", "/prompts/" + id + "/full").catch((e) => {
+  const full = await api("GET", "/prompts/" + id + "/full").catch((e) => {
     console.error(e); showToast("Couldn't load preset", "error"); return null;
   });
+  if (full && Array.isArray(full.sections)) full.sections = full.sections.map(normalizeSection);
+  state.presetFull = full;
 }
 async function loadLorebookEntries(id) {
   const list = await api("GET", "/lorebooks/" + id + "/entries").catch((e) => {
     console.error(e); showToast("Couldn't load entries", "error"); return [];
   });
-  state.lorebookEntries[id] = Array.isArray(list) ? list : [];
+  state.lorebookEntries[id] = Array.isArray(list) ? list.map(normalizeEntry) : [];
 }
 async function loadLorebookFolders(id) {
   const list = await api("GET", "/lorebooks/" + id + "/folders").catch((e) => {
@@ -887,7 +922,7 @@ function buildSimulatedPrompt() {
     if (!checked || !checked.size) continue;
     const entries = state.lorebookEntries[lbId] || [];
     for (const e of entries) {
-      if (checked.has(e.id) && e.enabled !== false) picked.push(e);
+      if (checked.has(e.id)) picked.push(e);
     }
   }
   const beforeEntries = picked.filter((e) => e.position === 0)
@@ -1388,6 +1423,9 @@ function renderBlock(block, overlaps) {
     block.kind === "lorebook-entry" && overlaps && overlaps.has(block.entry.id);
   if (isOverlapping) el.dataset.overlap = "true";
 
+  const isDisabled = block.kind === "lorebook-entry" && block.entry.enabled === false;
+  if (isDisabled) el.dataset.disabled = "true";
+
   const validateErrs = state.validationErrors[block.id];
   if (validateErrs && validateErrs.length) el.dataset.validateError = "true";
 
@@ -1512,6 +1550,9 @@ function renderSubblock(sub, overlaps) {
   subEl.dataset.selected =
     state.inspecting && state.inspecting.id === sub.id ? "true" : "false";
 
+  const subDisabled = sub.kind === "lorebook-entry" && sub.entry.enabled === false;
+  if (subDisabled) subEl.dataset.disabled = "true";
+
   const subExpanded = state.expandedBlocks.has(sub.id);
   const subHTML = blockPreviewHTML(sub, subExpanded);
   const subRaw = blockPreviewRaw(sub);
@@ -1599,6 +1640,23 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     }
   }
 
+  // Folder badge for lorebook entries that belong to a folder
+  let folderHTML = "";
+  if (block.kind === "lorebook-entry" && block.entry.folderId) {
+    const lbId = block.entry.lorebookId;
+    const folders = (lbId && state.lorebookFolders[lbId]) || [];
+    const folder = folders.find((f) => f.id === block.entry.folderId);
+    if (folder) {
+      folderHTML = `<span class="kaio-folder-badge">${escapeHTML(folder.name || "Folder")}</span>`;
+    }
+  }
+
+  // Disabled badge for disabled lorebook entries (rightmost indicator)
+  let disabledHTML = "";
+  if (block.kind === "lorebook-entry" && block.entry.enabled === false) {
+    disabledHTML = `<span class="kaio-disabled-badge">disabled</span>`;
+  }
+
   // For depth-injected sub-blocks, the existing depth label still appears at
   // the right; the order indicator (if any) sits to its left.
   const depthLabel = isSubblock && block.depth !== undefined
@@ -1615,9 +1673,11 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
     ${hintHTML}
     ${groupHTML}
+    ${folderHTML}
     ${orderHTML}
-    ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
+    ${disabledHTML}
     ${depthLabel}
+    ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
   `;
   return head;
 }
@@ -1986,6 +2046,12 @@ function renderRight() {
             "Insertion order relative to other lorebook entries at the same position. Lower numbers insert first."),
         ));
         c.appendChild(checkboxField("Enabled", f.enabled, "enabled"));
+        c.appendChild(rowOf(
+          checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion",
+            "Stop this entry's content from being scanned for additional lorebook keyword matches."),
+          checkboxField("Locked", f.locked, "locked",
+            "Lock this entry to prevent it from being edited in the regular lorebook UI."),
+        ));
         c.appendChild(matchingModeField(matchMode));
         if (matchMode === "selective") {
           c.appendChild(
@@ -2095,17 +2161,6 @@ function renderRight() {
         return c;
       }, lbC));
 
-      // ── Advanced ─────────────────────────────────
-      rightBodyEl.appendChild(renderCollapsible("Advanced", "advanced", () => {
-        const c = document.createElement("div");
-        c.appendChild(rowOf(
-          checkboxField("Prevent recursion", f.preventRecursion, "preventRecursion",
-            "Stop this entry's content from being scanned for additional lorebook keyword matches."),
-          checkboxField("Locked", f.locked, "locked",
-            "Lock this entry to prevent it from being edited in the regular lorebook UI."),
-        ));
-        return c;
-      }, lbC));
       break;
     }
 
@@ -4009,6 +4064,7 @@ function escapeHTML(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+console.log("[kolache-AIO] v1.7.0 loaded — Marinara Engine 2.0.0 (REST /api)");
 injectTopbarButton();
 tryInjectExtensionLauncher();
 marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });
