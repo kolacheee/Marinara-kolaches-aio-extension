@@ -4633,7 +4633,7 @@ function showPromptInspectorModal(messages, meta) {
   bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
 }
 
-console.log("[kolache-AIO] v1.8.0 loaded — Marinara Engine 2.0.0 (REST /api)");
+console.log("[kolache-AIO] v1.8.1 loaded — Marinara Engine 2.0.0 (REST /api)");
 injectTopbarButton();
 tryInjectExtensionLauncher();
 marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });

@@ -2,6 +2,13 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.8.1] — 2026-06-22
+
+### Fixed
+
+- **Prompt Inspector header on mobile.** The *Line breaks* / *Copy* / *Copy JSON* buttons no longer split across rows — they wrap together onto a single row, with the title on the first row and the ✕ pinned to the far-right corner.
+- **Column header alignment.** Condensed the Sources column subtext to one line so the **Sources / Simulated Prompt / Editor** headers are the same height and their bodies line up.
+
 ## [1.8.0] — 2026-06-22
 
 Adds a **Prompt Inspector** — capture the entire prompt as it would be sent to your LLM.
