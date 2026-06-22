@@ -4130,10 +4130,15 @@ function substituteVars(text, subs) {
 }
 
 // Serialize the console's current selection (the Simulated Prompt assembly)
-// into a flat, role-tagged message list with a {{chat_history}} placeholder
-// and depth-injected blocks stacked around it (higher depth first, mirroring
-// the Simulated Prompt column). Used for "omit history" and the no-chat case.
-function buildPromptMessagesFromSimulation() {
+// into a flat, role-tagged message list. At the chat-history anchor:
+//   • historyMessages omitted → a single {{chat_history}} placeholder with the
+//     depth-injected blocks stacked above it (higher depth first). Used for the
+//     "omit history" choice and the no-chat-open case.
+//   • historyMessages provided (an array of {role, content}) → the real chat
+//     turns, with each depth injection interleaved `depth` turns from the end
+//     (depth 1 = just before the last turn), mirroring runtime depth injection.
+//     Used as the connection-free fallback when the engine dry-run can't run.
+function buildPromptMessagesFromSimulation(historyMessages) {
   const blocks = buildSimulatedPrompt();
   const subs = activeVariableSubs();
   const out = [];
@@ -4154,11 +4159,32 @@ function buildPromptMessagesFromSimulation() {
           content: textOf({ kind: "lorebook-entry", entry: e }),
           depth: e.depth ?? 0,
         })),
-      ].sort((x, y) => (y.depth ?? 0) - (x.depth ?? 0));
-      for (const d of depth) {
-        if (d.content) out.push({ role: d.role, content: d.content, depthInjection: true, depth: d.depth });
+      ].filter((d) => d.content);
+
+      if (Array.isArray(historyMessages)) {
+        const L = historyMessages.length;
+        const byBoundary = {};
+        for (const d of depth) {
+          const idx = Math.max(0, Math.min(L, L - (d.depth || 0)));
+          (byBoundary[idx] = byBoundary[idx] || []).push(d);
+        }
+        for (let i = 0; i <= L; i++) {
+          for (const d of byBoundary[i] || []) {
+            out.push({ role: d.role, content: d.content, depthInjection: true, depth: d.depth });
+          }
+          if (i < L) {
+            const m = historyMessages[i] || {};
+            const role = m.role === "user" || m.role === "assistant" ? m.role : "system";
+            out.push({ role, content: m.content || "", isHistory: true });
+          }
+        }
+      } else {
+        depth.sort((x, y) => (y.depth ?? 0) - (x.depth ?? 0));
+        for (const d of depth) {
+          out.push({ role: d.role, content: d.content, depthInjection: true, depth: d.depth });
+        }
+        out.push({ role: "system", content: "{{chat_history}}", historyPlaceholder: true });
       }
-      out.push({ role: "system", content: "{{chat_history}}", historyPlaceholder: true });
       continue;
     }
     if (b.kind === "marker") continue; // runtime-only placeholder, no content
@@ -4167,6 +4193,18 @@ function buildPromptMessagesFromSimulation() {
     out.push({ role: roleOf(b), content });
   }
   return out;
+}
+
+// Fetch a chat's messages directly (no API connection required) for the
+// connection-free history fallback. Returns [] on any failure.
+async function fetchChatMessages(chatId) {
+  try {
+    const list = await api("GET", "/chats/" + chatId + "/messages");
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    console.error("[kolache-AIO] couldn't load chat messages", e);
+    return [];
+  }
 }
 
 // Capture the exact prompt the engine would send for a chat, via the dry-run
@@ -4244,9 +4282,24 @@ async function openPromptInspector() {
           messages = res.messages;
           meta = res.meta;
         } catch (e) {
-          console.error("[kolache-AIO] dryRun failed", e);
-          showPromptInspectorModal([], { mode: "error", error: (e && e.message) ? String(e.message) : String(e) });
-          return;
+          const errMsg = (e && e.message) ? String(e.message) : String(e);
+          // The dry-run needs an API connection (to resolve the model + context
+          // window). When the chat has none, fall back to a connection-free view:
+          // fetch the raw chat history and interleave it into the structural
+          // prompt. It isn't trimmed to a model context window, but it shows the
+          // real turns (with depth prompts placed between them).
+          if (/No API connection/i.test(errMsg)) {
+            const history = await fetchChatMessages(chatId);
+            messages = buildPromptMessagesFromSimulation(history);
+            meta = {
+              mode: "structural",
+              note: "This chat has no API connection, so the engine can't produce the exact prompt. Showing the assembled prompt with the raw chat history inserted — not trimmed to a model's context window.",
+            };
+          } else {
+            console.error("[kolache-AIO] dryRun failed", e);
+            showPromptInspectorModal([], { mode: "error", error: errMsg });
+            return;
+          }
         }
       } else {
         messages = buildPromptMessagesFromSimulation();
@@ -4309,7 +4362,7 @@ function showPromptInspectorModal(messages, meta) {
     badge.textContent = "Live capture failed";
     badge.dataset.mode = "error";
   } else {
-    badge.textContent = "Structural preview · console selection";
+    badge.textContent = meta.note ? "Raw chat history · no connection" : "Structural preview · console selection";
     badge.dataset.mode = "structural";
   }
 
@@ -4320,6 +4373,12 @@ function showPromptInspectorModal(messages, meta) {
     const show = piShowBreaks();
     breaksBtn.dataset.active = show ? "true" : "";
     body.innerHTML = "";
+    if (meta.note) {
+      const note = document.createElement("div");
+      note.className = "kaio-pi-note";
+      note.textContent = meta.note;
+      body.appendChild(note);
+    }
     if (!messages.length) {
       const empty = document.createElement("div");
       empty.className = "kaio-pi-empty";
