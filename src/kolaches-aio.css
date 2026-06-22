@@ -1702,6 +1702,7 @@
   background: var(--card, #0f0f15);
 }
 .kaio-pi-head .kaio-spacer { flex: 1 1 0; min-width: 0; }
+.kaio-pi-actions { display: flex; align-items: center; gap: 0.5rem; }
 .kaio-pi-title { font-size: 0.8125rem; font-weight: 600; white-space: nowrap; }
 .kaio-pi-badge {
   font-size: 0.625rem;
@@ -1871,12 +1872,18 @@
 @media (max-width: 768px) {
   .kaio-pi-bg { padding: 0; }
   .kaio-pi-modal { width: 100%; height: 100%; border-radius: 0; }
-  /* Title shrinks/ellipsizes so the Copy + close controls stay reachable. */
+  /* Row 1: title fills the line and the ✕ pins to the far right.
+     Row 2: the action buttons (Line breaks / Copy / Copy JSON) wrap together.
+     Row 3: the badge spans the full width. */
+  .kaio-pi-head .kaio-spacer { display: none; }
   .kaio-pi-title {
+    order: 1;
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .kaio-pi-badge { order: 5; max-width: 100%; flex-basis: 100%; }
+  .kaio-pi-head [data-pi="close"] { order: 2; }
+  .kaio-pi-actions { order: 3; flex-basis: 100%; }
+  .kaio-pi-badge { order: 4; max-width: 100%; flex-basis: 100%; }
 }

@@ -291,7 +291,7 @@ function buildConsole() {
         <section class="kaio-col kaio-col-left" data-col="left">
           <header class="kaio-col-header">
             <h3>Sources</h3>
-            <p>Pick one of each. Lorebook entries are added manually below.</p>
+            <p>Pick one of each. Add lorebooks below.</p>
           </header>
           <div class="kaio-col-body" data-region="left"></div>
         </section>
@@ -4484,9 +4484,11 @@ function showPromptInspectorModal(messages, meta) {
         <span class="kaio-pi-title">🔍 Prompt Inspector</span>
         <span class="kaio-pi-badge"></span>
         <span class="kaio-spacer"></span>
-        <button class="kaio-btn kaio-btn-ghost" data-pi="breaks" title="Toggle visible line breaks">¶ Line breaks</button>
-        <button class="kaio-btn" data-pi="copy" title="Copy as readable text (### role headers — not the wire format)">Copy</button>
-        <button class="kaio-btn" data-pi="copyjson" title="Copy the messages array as JSON — the structure actually sent to chat APIs">Copy JSON</button>
+        <div class="kaio-pi-actions">
+          <button class="kaio-btn kaio-btn-ghost" data-pi="breaks" title="Toggle visible line breaks">¶ Line breaks</button>
+          <button class="kaio-btn" data-pi="copy" title="Copy as readable text (### role headers — not the wire format)">Copy</button>
+          <button class="kaio-btn" data-pi="copyjson" title="Copy the messages array as JSON — the structure actually sent to chat APIs">Copy JSON</button>
+        </div>
         <button class="kaio-iconbtn" data-pi="close" title="Close (Esc)">✕</button>
       </div>
       <div class="kaio-pi-body"></div>
