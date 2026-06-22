@@ -6,12 +6,18 @@
 /* Top-bar button (the 🥞 entry-point) */
 .kaio-tab-btn {
   position: relative;
+  box-sizing: border-box;
+  /* Match Marinara's nav buttons exactly: a 0.9375rem icon + p-2 (0.5rem) on
+     every side = a 1.9375rem square. Emoji glyph metrics differ from the lucide
+     SVGs, so we pin the box instead of letting the emoji size it. */
+  width: 1.9375rem;
+  height: 1.9375rem;
   border-radius: 0.5rem;
   padding: 0.5rem;
   background: transparent;
   border: 0;
   color: var(--muted-foreground);
-  transition: all 0.2s;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: inherit;
   display: inline-flex;
   align-items: center;
@@ -21,6 +27,9 @@
 .kaio-tab-btn:hover {
   background: var(--accent);
   color: var(--primary);
+}
+.kaio-tab-btn:active {
+  transform: scale(0.95);
 }
 .kaio-tab-btn[data-active="true"] {
   background: var(--accent);
