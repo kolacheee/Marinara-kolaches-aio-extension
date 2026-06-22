@@ -285,7 +285,7 @@ function buildConsole() {
       <nav class="kaio-mobile-tabs" aria-label="Panel tabs">
         <button class="kaio-mobile-tab" data-tab="left"   data-active="true">Sources</button>
         <button class="kaio-mobile-tab" data-tab="middle">Prompt</button>
-        <button class="kaio-mobile-tab" data-tab="right">Inspector</button>
+        <button class="kaio-mobile-tab" data-tab="right">Editor</button>
       </nav>
       <div class="kaio-body" data-active-tab="left">
         <section class="kaio-col kaio-col-left" data-col="left">
@@ -300,7 +300,7 @@ function buildConsole() {
             <div class="kaio-col-header-row">
               <div class="kaio-col-header-text">
                 <h3>Simulated Prompt</h3>
-                <p>Click any block to inspect &amp; edit on the right.</p>
+                <p>Click any block to edit it on the right.</p>
               </div>
               <div class="kaio-col-header-actions">
                 <button class="kaio-col-header-btn" data-action="validate"
@@ -314,7 +314,7 @@ function buildConsole() {
         </section>
         <section class="kaio-col kaio-col-right" data-col="right">
           <header class="kaio-col-header">
-            <h3>Inspector</h3>
+            <h3>Editor</h3>
             <p>Edits write back to the actual source.</p>
           </header>
           <div class="kaio-col-body" data-region="right"></div>
@@ -2024,7 +2024,7 @@ function renderRight() {
   if (!state.inspecting || !state.draft) {
     const empty = document.createElement("div");
     empty.className = "kaio-right-empty";
-    empty.innerHTML = "Click a block in the simulated prompt to inspect &amp; edit it here.";
+    empty.innerHTML = "Click a block in the simulated prompt to edit it here.";
     rightBodyEl.appendChild(empty);
     return;
   }
@@ -4118,7 +4118,7 @@ function getActiveChatId() {
 
 // ── AIO settings (persisted in localStorage) ────────────────────
 const KAIO_SETTINGS_KEY = "kaio-settings";
-const KAIO_DEFAULT_SETTINGS = { connectionlessHistoryLimit: 0 };
+const KAIO_DEFAULT_SETTINGS = { connectionlessHistoryLimit: 0, inspectHistoryDefault: "ask" };
 function getSettings() {
   try {
     const raw = JSON.parse(localStorage.getItem(KAIO_SETTINGS_KEY) || "{}");
@@ -4151,6 +4151,15 @@ function showSettings() {
       </div>
       <div class="kaio-settings-body">
         <div class="kaio-set-field">
+          <label class="kaio-set-label" for="kaio-set-histdefault">Inspect — chat history default</label>
+          <select id="kaio-set-histdefault" class="kaio-set-input kaio-set-select" data-set="histDefault">
+            <option value="ask">Always ask</option>
+            <option value="include">Include history</option>
+            <option value="omit">Omit history</option>
+          </select>
+          <div class="kaio-set-hint">What 🔍 Inspect does when a chat is open. "Always ask" shows the Include / Omit prompt each time.</div>
+        </div>
+        <div class="kaio-set-field">
           <label class="kaio-set-label" for="kaio-set-histlimit">Connection-free Inspect — max history messages</label>
           <input id="kaio-set-histlimit" type="number" min="0" step="1" class="kaio-set-input" data-set="historyLimit" />
           <div class="kaio-set-hint">When a chat has no API connection, the Prompt Inspector inserts the raw chat history. This caps how many of the most recent turns are shown. <strong>0 = all.</strong></div>
@@ -4158,6 +4167,10 @@ function showSettings() {
       </div>
     </div>`;
   shell.appendChild(bg);
+
+  const histDefault = bg.querySelector('[data-set="histDefault"]');
+  histDefault.value = s.inspectHistoryDefault || "ask";
+  histDefault.addEventListener("change", () => setSetting("inspectHistoryDefault", histDefault.value));
 
   const input = bg.querySelector('[data-set="historyLimit"]');
   input.value = String(s.connectionlessHistoryLimit || 0);
@@ -4342,7 +4355,8 @@ async function openPromptInspector() {
     const chatId = getActiveChatId();
     let messages, meta;
     if (chatId) {
-      const choice = await askIncludeHistory();
+      const def = getSettings().inspectHistoryDefault;
+      const choice = (def === "include" || def === "omit") ? def : await askIncludeHistory();
       if (!choice) return;
       if (choice === "include") {
         showToast("Capturing prompt…", "info");

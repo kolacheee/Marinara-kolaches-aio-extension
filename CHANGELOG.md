@@ -16,7 +16,11 @@ Adds a **Prompt Inspector** — capture the entire prompt as it would be sent to
   - **Visible line-breaks toggle** (`¶`) renders a marker at each newline; the choice is remembered across opens. A **Copy** button copies the whole prompt as text.
   - Multimodal turns are annotated with image/file counts in the live capture.
   - On failure, the inspector shows the actual error (HTTP status + body) with a cause hint, instead of a generic "see console" message.
-- **⚙️ Settings menu.** A new settings button in the console titlebar (between *Reload* and *Close*). First option: a cap on how many recent chat turns the connection-free Inspect inserts (0 = all). Preferences persist in `localStorage`.
+- **⚙️ Settings menu.** A new settings button in the console titlebar (between *Reload* and *Close*). Options: a default for the Inspect history prompt (*Always ask* / *Include* / *Omit*, so you can skip the per-click dialog), and a cap on how many recent chat turns the connection-free Inspect inserts (0 = all). Preferences persist in `localStorage`.
+
+### Changed
+
+- **Renamed the right-hand "Inspector" column to "Editor"** (and dropped "inspect" from its hint text) to avoid confusion with the new 🔍 Inspect utility.
 
 ## [1.7.0] — 2026-06-22
 

@@ -1795,7 +1795,7 @@
 }
 .kaio-settings-head .kaio-spacer { flex: 1; }
 .kaio-settings-title { font-size: 0.8125rem; font-weight: 600; }
-.kaio-settings-body { padding: 0.875rem; }
+.kaio-settings-body { padding: 0.875rem; display: flex; flex-direction: column; gap: 1rem; }
 .kaio-set-field { display: flex; flex-direction: column; gap: 0.375rem; }
 .kaio-set-label { font-size: 0.75rem; font-weight: 600; color: var(--foreground); }
 .kaio-set-input {
@@ -1809,6 +1809,7 @@
   border-radius: 0.375rem;
 }
 .kaio-set-input:focus { outline: none; border-color: var(--primary, #a78bfa); }
+.kaio-set-select { width: auto; min-width: 9.5rem; cursor: pointer; }
 .kaio-set-hint { font-size: 0.6875rem; line-height: 1.45; color: var(--muted-foreground); }
 .kaio-pi-msg {
   border: 1px solid var(--border, #27272a);
