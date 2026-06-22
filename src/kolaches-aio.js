@@ -4482,7 +4482,8 @@ function showPromptInspectorModal(messages, meta) {
         <span class="kaio-pi-badge"></span>
         <span class="kaio-spacer"></span>
         <button class="kaio-btn kaio-btn-ghost" data-pi="breaks" title="Toggle visible line breaks">¶ Line breaks</button>
-        <button class="kaio-btn" data-pi="copy" title="Copy the full prompt">Copy</button>
+        <button class="kaio-btn" data-pi="copy" title="Copy as readable text (### role headers — not the wire format)">Copy</button>
+        <button class="kaio-btn" data-pi="copyjson" title="Copy the messages array as JSON — the structure actually sent to chat APIs">Copy JSON</button>
         <button class="kaio-iconbtn" data-pi="close" title="Close (Esc)">✕</button>
       </div>
       <div class="kaio-pi-body"></div>
@@ -4596,6 +4597,19 @@ function showPromptInspectorModal(messages, meta) {
     try {
       await navigator.clipboard.writeText(text);
       showToast("Prompt copied", "success");
+    } catch {
+      showToast("Copy failed — clipboard unavailable", "error");
+    }
+  });
+  bg.querySelector('[data-pi="copyjson"]').addEventListener("click", async () => {
+    const json = JSON.stringify(
+      messages.map((m) => ({ role: m.role || "system", content: m.content || "" })),
+      null,
+      2,
+    );
+    try {
+      await navigator.clipboard.writeText(json);
+      showToast("Copied as JSON", "success");
     } catch {
       showToast("Copy failed — clipboard unavailable", "error");
     }
