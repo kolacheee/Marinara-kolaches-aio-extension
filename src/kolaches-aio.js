@@ -279,6 +279,7 @@ function buildConsole() {
         <span class="kaio-spacer"></span>
         <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍 Inspect</button>
         <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
+        <button class="kaio-iconbtn" data-action="settings" title="AIO settings">⚙️</button>
         <button class="kaio-iconbtn" data-action="close" title="Close (Esc)">✕</button>
       </div>
       <nav class="kaio-mobile-tabs" aria-label="Panel tabs">
@@ -357,6 +358,7 @@ function buildConsole() {
     showToast("Reloaded", "success");
   });
   overlayEl.querySelector('[data-action="inspect"]').addEventListener("click", () => openPromptInspector());
+  overlayEl.querySelector('[data-action="settings"]').addEventListener("click", () => showSettings());
   overlayEl.querySelector('[data-action="validate"]').addEventListener(
     "click",
     runValidation,
@@ -4114,6 +4116,73 @@ function getActiveChatId() {
   }
 }
 
+// ── AIO settings (persisted in localStorage) ────────────────────
+const KAIO_SETTINGS_KEY = "kaio-settings";
+const KAIO_DEFAULT_SETTINGS = { connectionlessHistoryLimit: 0 };
+function getSettings() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KAIO_SETTINGS_KEY) || "{}");
+    return { ...KAIO_DEFAULT_SETTINGS, ...(raw && typeof raw === "object" ? raw : {}) };
+  } catch {
+    return { ...KAIO_DEFAULT_SETTINGS };
+  }
+}
+function setSetting(key, value) {
+  const s = getSettings();
+  s[key] = value;
+  try { localStorage.setItem(KAIO_SETTINGS_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+}
+
+function showSettings() {
+  const shell = overlayEl && overlayEl.querySelector(".kaio-shell");
+  if (!shell) return;
+  const prev = shell.querySelector(".kaio-settings-bg");
+  if (prev) { if (typeof prev._kaioClose === "function") prev._kaioClose(); else prev.remove(); }
+
+  const s = getSettings();
+  const bg = document.createElement("div");
+  bg.className = "kaio-confirm-bg kaio-settings-bg";
+  bg.innerHTML = `
+    <div class="kaio-settings" role="dialog" aria-label="AIO settings">
+      <div class="kaio-settings-head">
+        <span class="kaio-settings-title">⚙️ AIO Settings</span>
+        <span class="kaio-spacer"></span>
+        <button class="kaio-iconbtn" data-set="close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="kaio-settings-body">
+        <div class="kaio-set-field">
+          <label class="kaio-set-label" for="kaio-set-histlimit">Connection-free Inspect — max history messages</label>
+          <input id="kaio-set-histlimit" type="number" min="0" step="1" class="kaio-set-input" data-set="historyLimit" />
+          <div class="kaio-set-hint">When a chat has no API connection, the Prompt Inspector inserts the raw chat history. This caps how many of the most recent turns are shown. <strong>0 = all.</strong></div>
+        </div>
+      </div>
+    </div>`;
+  shell.appendChild(bg);
+
+  const input = bg.querySelector('[data-set="historyLimit"]');
+  input.value = String(s.connectionlessHistoryLimit || 0);
+  const commit = () => {
+    let v = parseInt(input.value, 10);
+    if (!Number.isFinite(v) || v < 0) v = 0;
+    input.value = String(v);
+    setSetting("connectionlessHistoryLimit", v);
+  };
+  input.addEventListener("change", commit);
+
+  function onKey(e) {
+    if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close(); }
+  }
+  function close() {
+    commit();
+    document.removeEventListener("keydown", onKey, true);
+    bg.remove();
+  }
+  bg._kaioClose = close;
+  document.addEventListener("keydown", onKey, true);
+  bg.querySelector('[data-set="close"]').addEventListener("click", close);
+  bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
+}
+
 // Plain-text variant of blockPreviewHTML's variable substitution — no HTML,
 // no <mark>. Non-variable macros ({{char}}, {{user}}, …) are left untouched.
 function substituteVars(text, subs) {
@@ -4289,11 +4358,16 @@ async function openPromptInspector() {
           // prompt. It isn't trimmed to a model context window, but it shows the
           // real turns (with depth prompts placed between them).
           if (/No API connection/i.test(errMsg)) {
-            const history = await fetchChatMessages(chatId);
+            const all = await fetchChatMessages(chatId);
+            const limit = getSettings().connectionlessHistoryLimit;
+            const limited = limit > 0 && all.length > limit;
+            const history = limited ? all.slice(-limit) : all;
             messages = buildPromptMessagesFromSimulation(history);
             meta = {
               mode: "structural",
-              note: "This chat has no API connection, so the engine can't produce the exact prompt. Showing the assembled prompt with the raw chat history inserted — not trimmed to a model's context window.",
+              note: "This chat has no API connection, so the engine can't produce the exact prompt. Showing the assembled prompt with "
+                + (limited ? ("the most recent " + limit + " of " + all.length + " chat turns") : "the raw chat history")
+                + " inserted — not trimmed to a model's context window. (Adjust the cap in ⚙ Settings.)",
             };
           } else {
             console.error("[kolache-AIO] dryRun failed", e);
