@@ -4430,9 +4430,12 @@ async function openPromptInspector() {
             messages = buildPromptMessagesFromSimulation(history);
             meta = {
               mode: "structural",
-              note: "This chat has no API connection, so the engine can't produce the exact prompt. Showing the assembled prompt with "
+              note: "No API connection on this chat, so this is a structural approximation — not the exact request. "
+                + "Preset macros (e.g. {{user}}, {{char}}) are left unresolved, wrap formatting (XML/markdown) isn't applied, "
+                + "the messages aren't merged/ordered exactly as the provider would receive them, and the history isn't "
+                + "trimmed to a model's context window. Showing "
                 + (limited ? ("the most recent " + limit + " of " + all.length + " chat turns") : "the raw chat history")
-                + " inserted — not trimmed to a model's context window. (Adjust the cap in ⚙ Settings.)",
+                + " (cap in ⚙ Settings). Add a connection and choose Include for the exact, resolved prompt — and Copy JSON for the real messages array.",
             };
           } else {
             console.error("[kolache-AIO] dryRun failed", e);
