@@ -4245,7 +4245,7 @@ async function openPromptInspector() {
           meta = res.meta;
         } catch (e) {
           console.error("[kolache-AIO] dryRun failed", e);
-          showToast("Couldn't capture live prompt — see console", "error");
+          showPromptInspectorModal([], { mode: "error", error: (e && e.message) ? String(e.message) : String(e) });
           return;
         }
       } else {
@@ -4305,6 +4305,9 @@ function showPromptInspectorModal(messages, meta) {
     if (meta.wrapFormat) bits.push(meta.wrapFormat);
     badge.textContent = "Live · " + bits.join(" · ");
     badge.dataset.mode = "live";
+  } else if (meta.mode === "error") {
+    badge.textContent = "Live capture failed";
+    badge.dataset.mode = "error";
   } else {
     badge.textContent = "Structural preview · console selection";
     badge.dataset.mode = "structural";
@@ -4320,9 +4323,27 @@ function showPromptInspectorModal(messages, meta) {
     if (!messages.length) {
       const empty = document.createElement("div");
       empty.className = "kaio-pi-empty";
-      empty.textContent = meta.mode === "structural"
-        ? "Nothing to preview yet — open Sources and pick a preset (plus optional character, persona, and lorebook entries) to see its assembled structure."
-        : "The engine returned an empty prompt.";
+      if (meta.mode === "error") {
+        const title = document.createElement("div");
+        title.className = "kaio-pi-error-title";
+        title.textContent = "Couldn't capture the live prompt";
+        const msg = document.createElement("pre");
+        msg.className = "kaio-pi-error-msg";
+        msg.textContent = meta.error || "Unknown error";
+        const hint = document.createElement("div");
+        hint.className = "kaio-pi-error-hint";
+        hint.textContent =
+          "403 → add this browser's origin to BOTH CORS_ORIGINS and CSRF_TRUSTED_ORIGINS in the engine .env. " +
+          "400 → the chat has no API connection configured. " +
+          "\"Failed to fetch\" → the request was blocked before reaching the server (CORS, or an interfering browser extension).";
+        empty.appendChild(title);
+        empty.appendChild(msg);
+        empty.appendChild(hint);
+      } else {
+        empty.textContent = meta.mode === "structural"
+          ? "Nothing to preview yet — open Sources and pick a preset (plus optional character, persona, and lorebook entries) to see its assembled structure."
+          : "The engine returned an empty prompt.";
+      }
       body.appendChild(empty);
       return;
     }
