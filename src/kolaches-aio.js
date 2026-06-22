@@ -214,7 +214,30 @@ function injectTopbarButton() {
   btn.innerHTML = '<span class="kaio-tab-emoji">🥞</span>';
   btn.addEventListener("click", () => openConsole());
   nav.insertBefore(btn, nav.firstChild);
+  matchTopbarButtonShape(btn, nav);
   return true;
+}
+
+// Copy a neighbouring nav button's rendered box (size + corner radius + padding)
+// onto ours so the hover / active highlight matches the engine's buttons
+// exactly. The engine's Tailwind classes for these buttons vary between builds
+// (e.g. p-1.5/rounded-xl vs p-2/rounded-lg), so we measure rather than hard-code.
+// Falls back to the stylesheet rule if no sibling is laid out yet.
+function matchTopbarButtonShape(btn, nav) {
+  try {
+    const sib = nav.querySelector("button:not(.kaio-tab-btn)");
+    if (!sib) return;
+    const rect = sib.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const cs = getComputedStyle(sib);
+    btn.style.boxSizing = "border-box";
+    btn.style.width = rect.width + "px";
+    btn.style.height = rect.height + "px";
+    btn.style.padding = cs.padding;
+    btn.style.borderRadius = cs.borderRadius;
+  } catch {
+    /* non-fatal — fall back to the .kaio-tab-btn stylesheet rule */
+  }
 }
 
 // ── Extension-card 🥞 button (injected into Settings → Extensions) ──
