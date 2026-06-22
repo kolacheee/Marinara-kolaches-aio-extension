@@ -1767,6 +1767,7 @@
   color: var(--muted-foreground);
 }
 .kaio-pi-note {
+  flex-shrink: 0;
   margin-bottom: 0.25rem;
   padding: 0.5rem 0.625rem;
   font-size: 0.6875rem;
@@ -1810,23 +1811,41 @@
 }
 .kaio-set-input:focus { outline: none; border-color: var(--primary, #a78bfa); }
 .kaio-set-select { width: auto; min-width: 9.5rem; cursor: pointer; }
+.kaio-set-checkrow { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.kaio-set-checkrow input { accent-color: var(--primary, #a78bfa); }
+.kaio-set-checkrow .kaio-set-label { font-weight: 500; }
+.kaio-set-colorrow { display: flex; gap: 1rem; flex-wrap: wrap; }
+.kaio-set-color { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.6875rem; color: var(--muted-foreground); cursor: pointer; }
+.kaio-set-color input[type="color"] {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+}
+.kaio-set-divider { height: 1px; background: var(--border, #27272a); margin: 0.25rem 0; }
+.kaio-set-group-label { font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--primary, #a78bfa); }
 .kaio-set-hint { font-size: 0.6875rem; line-height: 1.45; color: var(--muted-foreground); }
 .kaio-pi-msg {
+  flex-shrink: 0; /* don't let short blocks squish — the body scrolls instead */
   border: 1px solid var(--border, #27272a);
-  border-left-width: 3px;
+  border-left-width: var(--pi-border-width, 3px);
   border-radius: 0.5rem;
   overflow: hidden;
   background: var(--background, rgba(0, 0, 0, 0.2));
 }
-.kaio-pi-msg[data-role="system"]    { border-left-color: #60a5fa; }
-.kaio-pi-msg[data-role="user"]      { border-left-color: #34d399; }
-.kaio-pi-msg[data-role="assistant"] { border-left-color: #fbbf24; }
+.kaio-pi-msg[data-role="system"]    { border-left-color: var(--pi-system, #22d3ee); }
+.kaio-pi-msg[data-role="user"]      { border-left-color: var(--pi-user, #facc15); }
+.kaio-pi-msg[data-role="assistant"] { border-left-color: var(--pi-assistant, #e879f9); }
 .kaio-pi-msg[data-depth="true"]     { border-left-style: dashed; }
 .kaio-pi-msg[data-placeholder="true"] {
   border-style: dashed;
   opacity: 0.85;
 }
 .kaio-pi-msg-role {
+  display: none; /* hidden by default — the coloured left border conveys role */
   font-size: 0.5625rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -1836,6 +1855,7 @@
   border-bottom: 1px solid var(--border, #27272a);
   background: var(--card, #0f0f15);
 }
+.kaio-pi-modal[data-role-labels="true"] .kaio-pi-msg-role { display: block; }
 .kaio-pi-pre {
   margin: 0;
   padding: 0.625rem 0.75rem;

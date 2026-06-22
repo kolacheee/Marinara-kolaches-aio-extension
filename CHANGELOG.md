@@ -8,7 +8,7 @@ Adds a **Prompt Inspector** — capture the entire prompt as it would be sent to
 
 ### Added
 
-- **🔍 Prompt Inspector.** A new button in the console titlebar (next to *Reload*) opens a modal showing the full assembled prompt as a list of role-tagged messages (System / User / Assistant), colour-coded by role.
+- **🔍 Prompt Inspector.** A new button in the console titlebar (next to *Reload*) opens a modal showing the full assembled prompt as a list of messages, **colour-coded by role** via the left border (System = cyan, Assistant = magenta, User = yellow by default). Text role labels are off by default and can be turned on in Settings.
   - **With a chat open**, it asks whether to **include** the active chat history (fit to the preset's context limit) or **omit** it. *Include* captures the engine's exact prompt via Marinara 2.0.0's dry-run preview (`POST /api/generate/dryRun`), including the model, context size, and wrap format. *Omit* shows the structural preview from your current console selection with a `{{chat_history}}` placeholder.
   - **With no chat open**, it skips the prompt and shows the structural preview directly.
   - **Depth-injected** sections and lorebook entries are stacked by depth around the chat-history placeholder (higher depth first), mirroring how they assemble at runtime.
@@ -16,11 +16,15 @@ Adds a **Prompt Inspector** — capture the entire prompt as it would be sent to
   - **Visible line-breaks toggle** (`¶`) renders a marker at each newline; the choice is remembered across opens. A **Copy** button copies the whole prompt as text.
   - Multimodal turns are annotated with image/file counts in the live capture.
   - On failure, the inspector shows the actual error (HTTP status + body) with a cause hint, instead of a generic "see console" message.
-- **⚙️ Settings menu.** A new settings button in the console titlebar (between *Reload* and *Close*). Options: a default for the Inspect history prompt (*Always ask* / *Include* / *Omit*, so you can skip the per-click dialog), and a cap on how many recent chat turns the connection-free Inspect inserts (0 = all). Preferences persist in `localStorage`.
+- **⚙️ Settings menu.** A new settings button in the console titlebar (between *Reload* and *Close*). Options: a default for the Inspect history prompt (*Always ask* / *Include* / *Omit*, so you can skip the per-click dialog); a cap on how many recent chat turns the connection-free Inspect inserts (0 = all); a toggle for the Prompt Inspector's text role labels; and **customisable role colours + border thickness** for accessibility. Preferences persist in `localStorage`.
 
 ### Changed
 
 - **Renamed the right-hand "Inspector" column to "Editor"** (and dropped "inspect" from its hint text) to avoid confusion with the new 🔍 Inspect utility.
+
+### Fixed
+
+- **Short Prompt Inspector blocks no longer squish.** A flex-column trap shrank one-line messages (e.g. a tiny `Role` section or a one-word turn) to an unreadable sliver; blocks now keep their height and the modal scrolls.
 
 ## [1.7.0] — 2026-06-22
 

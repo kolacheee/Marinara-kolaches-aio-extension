@@ -4118,7 +4118,15 @@ function getActiveChatId() {
 
 // ── AIO settings (persisted in localStorage) ────────────────────
 const KAIO_SETTINGS_KEY = "kaio-settings";
-const KAIO_DEFAULT_SETTINGS = { connectionlessHistoryLimit: 0, inspectHistoryDefault: "ask" };
+const KAIO_DEFAULT_SETTINGS = {
+  connectionlessHistoryLimit: 0,
+  inspectHistoryDefault: "ask",
+  piShowRoleLabels: false,
+  piColorSystem: "#22d3ee",    // cyan
+  piColorAssistant: "#e879f9", // magenta
+  piColorUser: "#facc15",      // yellow
+  piBorderWidth: 3,
+};
 function getSettings() {
   try {
     const raw = JSON.parse(localStorage.getItem(KAIO_SETTINGS_KEY) || "{}");
@@ -4164,6 +4172,28 @@ function showSettings() {
           <input id="kaio-set-histlimit" type="number" min="0" step="1" class="kaio-set-input" data-set="historyLimit" />
           <div class="kaio-set-hint">When a chat has no API connection, the Prompt Inspector inserts the raw chat history. This caps how many of the most recent turns are shown. <strong>0 = all.</strong></div>
         </div>
+        <div class="kaio-set-divider"></div>
+        <div class="kaio-set-group-label">Prompt Inspector appearance</div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-checkrow">
+            <input type="checkbox" data-set="roleLabels" />
+            <span class="kaio-set-label">Show role labels (System / User / Assistant)</span>
+          </label>
+          <div class="kaio-set-hint">Off by default — roles are shown by the coloured left border instead.</div>
+        </div>
+        <div class="kaio-set-field">
+          <span class="kaio-set-label">Role colours</span>
+          <div class="kaio-set-colorrow">
+            <label class="kaio-set-color"><input type="color" data-set="colorSystem" /> System</label>
+            <label class="kaio-set-color"><input type="color" data-set="colorAssistant" /> Assistant</label>
+            <label class="kaio-set-color"><input type="color" data-set="colorUser" /> User</label>
+          </div>
+        </div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-label" for="kaio-set-borderw">Role border thickness (px)</label>
+          <input id="kaio-set-borderw" type="number" min="1" max="16" step="1" class="kaio-set-input" data-set="borderWidth" />
+          <div class="kaio-set-hint">Thicker borders can help tell roles apart at a glance.</div>
+        </div>
       </div>
     </div>`;
   shell.appendChild(bg);
@@ -4181,6 +4211,27 @@ function showSettings() {
     setSetting("connectionlessHistoryLimit", v);
   };
   input.addEventListener("change", commit);
+
+  const roleLabels = bg.querySelector('[data-set="roleLabels"]');
+  roleLabels.checked = !!s.piShowRoleLabels;
+  roleLabels.addEventListener("change", () => setSetting("piShowRoleLabels", roleLabels.checked));
+
+  const colorMap = { colorSystem: "piColorSystem", colorAssistant: "piColorAssistant", colorUser: "piColorUser" };
+  for (const attr of Object.keys(colorMap)) {
+    const el = bg.querySelector('[data-set="' + attr + '"]');
+    el.value = s[colorMap[attr]] || KAIO_DEFAULT_SETTINGS[colorMap[attr]];
+    el.addEventListener("input", () => setSetting(colorMap[attr], el.value));
+  }
+
+  const borderW = bg.querySelector('[data-set="borderWidth"]');
+  borderW.value = String(s.piBorderWidth || 3);
+  borderW.addEventListener("change", () => {
+    let v = parseInt(borderW.value, 10);
+    if (!Number.isFinite(v) || v < 1) v = 1;
+    if (v > 16) v = 16;
+    borderW.value = String(v);
+    setSetting("piBorderWidth", v);
+  });
 
   function onKey(e) {
     if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close(); }
@@ -4437,6 +4488,16 @@ function showPromptInspectorModal(messages, meta) {
       <div class="kaio-pi-body"></div>
     </div>`;
   shell.appendChild(bg);
+
+  // Apply user appearance settings (role colours, border width, label visibility)
+  // as CSS variables / a data-attr on the modal root.
+  const piSettings = getSettings();
+  const modal = bg.querySelector(".kaio-pi-modal");
+  modal.style.setProperty("--pi-system", piSettings.piColorSystem || KAIO_DEFAULT_SETTINGS.piColorSystem);
+  modal.style.setProperty("--pi-assistant", piSettings.piColorAssistant || KAIO_DEFAULT_SETTINGS.piColorAssistant);
+  modal.style.setProperty("--pi-user", piSettings.piColorUser || KAIO_DEFAULT_SETTINGS.piColorUser);
+  modal.style.setProperty("--pi-border-width", (piSettings.piBorderWidth || 3) + "px");
+  modal.dataset.roleLabels = piSettings.piShowRoleLabels ? "true" : "false";
 
   const badge = bg.querySelector(".kaio-pi-badge");
   if (meta.mode === "live") {
