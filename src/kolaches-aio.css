@@ -263,6 +263,55 @@
   opacity: 0.6;
   cursor: help;
 }
+
+/* Simulated Prompt filter bar. */
+.kaio-middle-search {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  background: var(--background, #0a0a0f);
+}
+.kaio-middle-search:focus-within {
+  border-color: var(--primary, #a78bfa);
+}
+.kaio-middle-search-icon {
+  font-size: 0.6875rem;
+  opacity: 0.6;
+  flex: 0 0 auto;
+}
+.kaio-middle-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0;
+}
+.kaio-middle-search-input:focus { outline: none; }
+.kaio-middle-search-input::placeholder { color: var(--muted-foreground); opacity: 0.7; }
+/* Hide the native search clear control — we render our own. */
+.kaio-middle-search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.kaio-middle-search-clear {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+}
+.kaio-middle-search-clear:hover {
+  color: var(--foreground);
+  background: var(--accent, #25252e);
+}
 .kaio-col-body {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -1184,9 +1233,8 @@
   font-weight: 700;
 }
 
-/* Rough per-block token estimate — a quiet grey pill on the right side. */
+/* Rough per-block token estimate — a quiet grey pill beside the block name. */
 .kaio-block-tokens {
-  margin-left: auto;
   font-size: 0.5625rem;
   padding: 0.0625rem 0.375rem;
   border-radius: 999px;

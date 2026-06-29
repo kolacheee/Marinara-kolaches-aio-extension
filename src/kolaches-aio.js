@@ -114,6 +114,7 @@ const state = {
   variablePreviews: {},
   expandedBlocks: new Set(),     // block IDs whose preview is shown in full
   variablesPanelCollapsed: false,
+  middleFilter: "",              // Simulated Prompt search/filter query (transient)
 
   // Validation: { blockId → [{ kind, message, snippet }, ...] }
   // Cleared on Reload, source-switch, and Save. Repopulated by clicking
@@ -310,6 +311,12 @@ function buildConsole() {
                 </button>
               </div>
             </div>
+            <div class="kaio-middle-search">
+              <span class="kaio-middle-search-icon">🔍</span>
+              <input type="search" class="kaio-middle-search-input" data-action="filter"
+                     placeholder="Filter blocks by name or content…" aria-label="Filter simulated prompt blocks" />
+              <button class="kaio-middle-search-clear" data-action="filter-clear" title="Clear filter" hidden>✕</button>
+            </div>
             <div class="kaio-token-gauge" data-region="token-gauge" data-empty="true"></div>
           </header>
           <div class="kaio-col-body" data-region="middle"></div>
@@ -366,6 +373,33 @@ function buildConsole() {
     "click",
     runValidation,
   );
+
+  // Simulated Prompt filter — re-renders only the middle body, so the input
+  // (which lives in the static header) keeps focus while typing.
+  const filterInput = overlayEl.querySelector('[data-action="filter"]');
+  const filterClear = overlayEl.querySelector('[data-action="filter-clear"]');
+  filterInput.addEventListener("input", () => {
+    state.middleFilter = filterInput.value;
+    filterClear.hidden = !filterInput.value;
+    renderMiddle();
+  });
+  filterInput.addEventListener("keydown", (e) => {
+    // Esc clears the filter first; only closes the console when already empty.
+    if (e.key === "Escape" && filterInput.value) {
+      e.stopPropagation();
+      filterInput.value = "";
+      state.middleFilter = "";
+      filterClear.hidden = true;
+      renderMiddle();
+    }
+  });
+  filterClear.addEventListener("click", () => {
+    filterInput.value = "";
+    state.middleFilter = "";
+    filterClear.hidden = true;
+    renderMiddle();
+    filterInput.focus();
+  });
 
   // Mobile tab switching
   overlayEl.querySelector(".kaio-mobile-tabs").addEventListener("click", (e) => {
@@ -1453,6 +1487,11 @@ function renderMiddle() {
   if (!middleBodyEl) return;
   middleBodyEl.innerHTML = "";
 
+  // The filter bar is only useful once a preset's blocks are on screen.
+  const searchRow = overlayEl && overlayEl.querySelector(".kaio-middle-search");
+  const hasBlocks = !!(state.selectedPresetId && state.presetFull);
+  if (searchRow) searchRow.hidden = !hasBlocks;
+
   if (!state.selectedPresetId) {
     middleBodyEl.innerHTML = `
       <div class="kaio-middle-empty">
@@ -1475,10 +1514,35 @@ function renderMiddle() {
   }
 
   const overlaps = computeEntryOverlaps(blocks);
-  for (const b of blocks) {
-    middleBodyEl.appendChild(renderBlock(b, overlaps));
+  const q = (state.middleFilter || "").trim().toLowerCase();
+  const shown = q ? blocks.filter((b) => blockMatchesFilter(b, q)) : blocks;
+  if (!shown.length) {
+    middleBodyEl.innerHTML =
+      `<div class="kaio-middle-empty"><div>No blocks match “${escapeHTML(state.middleFilter.trim())}”.</div></div>`;
+  } else {
+    for (const b of shown) {
+      middleBodyEl.appendChild(renderBlock(b, overlaps));
+    }
   }
+  // The gauge always reflects the full prompt, not the filtered subset.
   renderTokenGauge(blocks);
+}
+
+// True when a block matches the Simulated Prompt filter (case-insensitive,
+// already lower-cased). Chat-history matches on its depth-injected items too.
+function blockMatchesFilter(block, q) {
+  if (!q) return true;
+  const hay = [
+    blockTitle(block),
+    blockTagText(block),
+    block.kind === "chat-history" ? "" : blockPreviewRaw(block),
+    (block.entry && block.entry.role) || (block.section && block.section.role) || "",
+  ];
+  if (block.kind === "chat-history") {
+    for (const s of block.depthSections || []) hay.push(s.name || "", s.content || "");
+    for (const e of block.depthEntries || []) hay.push(e.name || "", e.content || "");
+  }
+  return hay.join("\n").toLowerCase().includes(q);
 }
 
 // Context-window size the gauge fills toward (rough; 0 hides the bar).
@@ -1817,12 +1881,12 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
   head.innerHTML = `
     <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
+    ${tokenHTML}
     ${hintHTML}
     ${groupHTML}
     ${folderHTML}
     ${orderHTML}
     ${disabledHTML}
-    ${tokenHTML}
     ${depthLabel}
     ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
   `;
