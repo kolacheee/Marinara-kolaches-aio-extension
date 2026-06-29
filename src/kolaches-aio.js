@@ -391,6 +391,7 @@ async function openConsole() {
   if (!overlayEl) buildConsole();
   overlayEl.dataset.open = "true";
   await loadAllSources();
+  await restoreSelection();
   renderAll();
 }
 
@@ -463,11 +464,76 @@ async function loadPersona(id) {
   });
 }
 
+// ── Remember last selection (persisted across opens) ───────────
+const KAIO_SELECTION_KEY = "kaio-selection";
+function persistSelection() {
+  try {
+    const entries = {};
+    for (const [lbId, set] of Object.entries(state.selectedEntryIdsByLorebook)) {
+      if (set && set.size) entries[lbId] = [...set];
+    }
+    const folders = {};
+    for (const [lbId, set] of Object.entries(state.selectedFolderIdsByLorebook)) {
+      if (set && set.size) folders[lbId] = [...set];
+    }
+    localStorage.setItem(KAIO_SELECTION_KEY, JSON.stringify({
+      presetId: state.selectedPresetId,
+      lorebookIds: state.selectedLorebookIds,
+      activeLorebookId: state.activeLorebookId,
+      characterId: state.selectedCharacterId,
+      personaId: state.selectedPersonaId,
+      entries,
+      folders,
+    }));
+  } catch { /* ignore */ }
+}
+// Restore the saved selection, but only IDs that still exist in the freshly
+// loaded sources (so deleted presets/lorebooks/etc. are quietly dropped).
+async function restoreSelection() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KAIO_SELECTION_KEY) || "null"); } catch { saved = null; }
+  if (!saved || typeof saved !== "object") return;
+
+  if (saved.presetId && state.presets.some((p) => p.id === saved.presetId)) {
+    state.selectedPresetId = saved.presetId;
+    await loadPresetFull(saved.presetId);
+  }
+
+  const validLbIds = Array.isArray(saved.lorebookIds)
+    ? saved.lorebookIds.filter((id) => state.lorebooks.some((lb) => lb.id === id))
+    : [];
+  state.selectedLorebookIds = validLbIds;
+  state.activeLorebookId =
+    saved.activeLorebookId && validLbIds.includes(saved.activeLorebookId)
+      ? saved.activeLorebookId
+      : (validLbIds[validLbIds.length - 1] || null);
+  for (const lbId of validLbIds) {
+    await loadLorebookEntries(lbId);
+    await loadLorebookFolders(lbId);
+    const entries = state.lorebookEntries[lbId] || [];
+    const savedEntries = (saved.entries && saved.entries[lbId]) || [];
+    state.selectedEntryIdsByLorebook[lbId] = new Set(savedEntries.filter((eid) => entries.some((e) => e.id === eid)));
+    const folders = state.lorebookFolders[lbId] || [];
+    const savedFolders = (saved.folders && saved.folders[lbId]) || [];
+    state.selectedFolderIdsByLorebook[lbId] = new Set(savedFolders.filter((fid) => folders.some((f) => f.id === fid)));
+  }
+
+  if (saved.characterId && state.characters.some((c) => c.id === saved.characterId)) {
+    state.selectedCharacterId = saved.characterId;
+    await loadCharacter(saved.characterId);
+  }
+  if (saved.personaId && state.personas.some((p) => p.id === saved.personaId)) {
+    state.selectedPersonaId = saved.personaId;
+    await loadPersona(saved.personaId);
+  }
+}
+
 // ── Rendering ─────────────────────────────────────────────────
 function renderAll() {
   renderLeft();
   renderMiddle();
   renderRight();
+  persistSelection();
 }
 
 // LEFT — source pickers
