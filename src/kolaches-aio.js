@@ -897,8 +897,7 @@ function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange
   wrap.appendChild(renderSearchableSelect({
     items,
     valueId,
-    placeholder,
-    blankLabel: placeholder, // lets the user clear back to "none"
+    placeholder, // shown in the field itself; no duplicate blank row in the list
     ariaLabel: label,
     onChange,
   }));
