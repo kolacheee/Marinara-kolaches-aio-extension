@@ -4464,6 +4464,13 @@ function piShowBreaks() {
 function setPiShowBreaks(v) {
   try { localStorage.setItem("kaio-pi-breaks", v ? "1" : "0"); } catch { /* ignore */ }
 }
+// View mode preference (plaintext default), persisted across opens.
+function piView() {
+  try { return localStorage.getItem("kaio-pi-view") === "json" ? "json" : "plaintext"; } catch { return "plaintext"; }
+}
+function setPiView(v) {
+  try { localStorage.setItem("kaio-pi-view", v === "json" ? "json" : "plaintext"); } catch { /* ignore */ }
+}
 function piRoleLabel(role) {
   if (role === "user") return "User";
   if (role === "assistant") return "Assistant";
@@ -4485,6 +4492,7 @@ function showPromptInspectorModal(messages, meta) {
         <span class="kaio-pi-badge"></span>
         <span class="kaio-spacer"></span>
         <div class="kaio-pi-actions">
+          <button class="kaio-btn" data-pi="view" title="Toggle between plaintext and a JSON messages array (colour-coding kept either way)">{ } JSON</button>
           <button class="kaio-btn kaio-btn-ghost" data-pi="breaks" title="Toggle visible line breaks">¶ Line breaks</button>
           <button class="kaio-btn" data-pi="copy" title="Copy as readable text (### role headers — not the wire format)">Copy</button>
           <button class="kaio-btn" data-pi="copyjson" title="Copy the messages array as JSON — the structure actually sent to chat APIs">Copy JSON</button>
@@ -4523,9 +4531,13 @@ function showPromptInspectorModal(messages, meta) {
 
   const body = bg.querySelector(".kaio-pi-body");
   const breaksBtn = bg.querySelector('[data-pi="breaks"]');
+  const viewBtn = bg.querySelector('[data-pi="view"]');
 
   function renderBody() {
+    const view = piView();
     const show = piShowBreaks();
+    modal.dataset.view = view;
+    viewBtn.dataset.active = view === "json" ? "true" : "";
     breaksBtn.dataset.active = show ? "true" : "";
     body.innerHTML = "";
     if (meta.note) {
@@ -4561,7 +4573,13 @@ function showPromptInspectorModal(messages, meta) {
       body.appendChild(empty);
       return;
     }
-    for (const m of messages) {
+    if (view === "json") {
+      const open = document.createElement("div");
+      open.className = "kaio-pi-json-bracket";
+      open.textContent = "[";
+      body.appendChild(open);
+    }
+    messages.forEach((m, i) => {
       const blk = document.createElement("div");
       blk.className = "kaio-pi-msg";
       blk.dataset.role = m.role || "system";
@@ -4581,17 +4599,32 @@ function showPromptInspectorModal(messages, meta) {
 
       const pre = document.createElement("pre");
       pre.className = "kaio-pi-pre";
-      const content = m.content || "";
-      pre.textContent = show ? content.replace(/\n/g, "↵\n") : content;
+      if (view === "json") {
+        // Per-message JSON object, colour-coded by the block's left border.
+        // Copy JSON still yields the full valid array; this view keeps the
+        // role colour-coding for visual comprehension.
+        const obj = { role: m.role || "system", content: m.content || "" };
+        pre.textContent = JSON.stringify(obj, null, 2) + (i < messages.length - 1 ? "," : "");
+      } else {
+        const content = m.content || "";
+        pre.textContent = show ? content.replace(/\n/g, "↵\n") : content;
+      }
 
       blk.appendChild(label);
       blk.appendChild(pre);
       body.appendChild(blk);
+    });
+    if (view === "json") {
+      const close = document.createElement("div");
+      close.className = "kaio-pi-json-bracket";
+      close.textContent = "]";
+      body.appendChild(close);
     }
   }
   renderBody();
 
   breaksBtn.addEventListener("click", () => { setPiShowBreaks(!piShowBreaks()); renderBody(); });
+  viewBtn.addEventListener("click", () => { setPiView(piView() === "json" ? "plaintext" : "json"); renderBody(); });
   bg.querySelector('[data-pi="copy"]').addEventListener("click", async () => {
     const text = messages.map((m) => {
       const head = m.historyPlaceholder

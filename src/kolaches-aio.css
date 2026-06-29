@@ -1868,6 +1868,15 @@
   color: var(--foreground);
 }
 .kaio-pi-msg[data-placeholder="true"] .kaio-pi-pre { color: var(--muted-foreground); }
+/* JSON view: line-breaks toggle is irrelevant (content is escaped); hide it. */
+.kaio-pi-modal[data-view="json"] [data-pi="breaks"] { display: none; }
+.kaio-pi-json-bracket {
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  padding: 0 0.25rem;
+}
 
 @media (max-width: 768px) {
   .kaio-pi-bg { padding: 0; }
