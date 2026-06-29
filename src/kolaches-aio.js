@@ -115,6 +115,8 @@ const state = {
   expandedBlocks: new Set(),     // block IDs whose preview is shown in full
   variablesPanelCollapsed: false,
   middleFilter: "",              // Simulated Prompt search/filter query (transient)
+  entryFilter: "",               // active lorebook's entry-search query (transient)
+  entryFilterOpen: false,        // whether the entry-search box is shown
 
   // Validation: { blockId → [{ kind, message, snippet }, ...] }
   // Cleared on Reload, source-switch, and Save. Repopulated by clicking
@@ -132,6 +134,10 @@ const state = {
   presetGroupBatchAdd: { groupId: null, selected: new Set() },
   // Which variable is expanded in the preset variables panel (null = none)
   presetExpandedVariableId: null,
+
+  // Active connection's Max Context Window for the token gauge (null = none).
+  // Resolved on console open / Reload from /api/connections + the active chat.
+  activeConnection: null, // { maxContext, label } | null
 };
 
 // ── DOM refs (populated by buildConsole) ──────────────────────
@@ -361,6 +367,7 @@ function buildConsole() {
     }
     if (state.selectedCharacterId) await loadCharacter(state.selectedCharacterId);
     if (state.selectedPersonaId) await loadPersona(state.selectedPersonaId);
+    await loadActiveConnectionContext();
     state.validationErrors = {};
     state.validationRanLast = false;
     resetValidateBtn();
@@ -429,6 +436,7 @@ async function openConsole() {
   overlayEl.dataset.open = "true";
   await loadAllSources();
   await restoreSelection();
+  await loadActiveConnectionContext();
   renderAll();
 }
 
@@ -440,6 +448,7 @@ function attemptClose() {
   closeConsoleNow();
 }
 function closeConsoleNow() {
+  persistSelection(); // save any in-memory selection that didn't flow through renderAll
   if (overlayEl) {
     // Tear down any open Prompt Inspector modal / Include-Omit dialog so their
     // document-level keydown listeners don't leak past the console closing.
@@ -470,6 +479,40 @@ async function loadAllSources() {
     showToast("Failed to load sources — see console", "error");
   }
 }
+
+// Resolve the active connection's Max Context Window for the token gauge.
+// "Active" mirrors the engine's runtime rule: the open chat's connectionId if
+// set, otherwise the default connection (isDefault === "true"). Stores
+// { maxContext, label } in state.activeConnection, or null when none resolves
+// (in which case the token gauge is hidden entirely). Best-effort — any
+// failure leaves activeConnection null rather than throwing.
+async function loadActiveConnectionContext() {
+  state.activeConnection = null;
+  try {
+    const conns = await api("GET", "/connections/").catch(() => null);
+    if (!Array.isArray(conns) || !conns.length) return;
+
+    let conn = null;
+    const chatId = getActiveChatId();
+    if (chatId) {
+      const chat = await api("GET", "/chats/" + chatId).catch(() => null);
+      const cid = chat && chat.connectionId;
+      if (cid) conn = conns.find((c) => c.id === cid) || null;
+    }
+    // Fall back to the default connection (booleans come back as strings).
+    if (!conn) conn = conns.find((c) => c.isDefault === "true" || c.isDefault === true) || null;
+    if (!conn) return;
+
+    const mc = parseInt(conn.maxContext, 10);
+    if (Number.isFinite(mc) && mc > 0) {
+      state.activeConnection = {
+        maxContext: mc,
+        label: conn.name || conn.model || "connection",
+      };
+    }
+  } catch { /* leave activeConnection null */ }
+}
+
 async function loadPresetFull(id) {
   const full = await api("GET", "/prompts/" + id + "/full").catch((e) => {
     console.error(e); showToast("Couldn't load preset", "error"); return null;
@@ -598,7 +641,7 @@ function renderLeft() {
     },
   });
   if (state.selectedPresetId && state.presetFull) {
-    const sel = presetPicker.querySelector(".kaio-select");
+    const sel = presetPicker.querySelector(".kaio-combo");
     if (sel) {
       const row = document.createElement("div");
       row.className = "kaio-source-select-row";
@@ -649,38 +692,30 @@ function renderLeft() {
 
     const rowHeader = document.createElement("div");
     rowHeader.className = "kaio-lb-rowhead";
-    // Clicking the row's dropdown area should also "activate" that lorebook.
-    rowHeader.addEventListener("mousedown", () => {
+    // Clicking a non-active lorebook row "activates" it (shows its entries).
+    // preventDefault stops the combo input from focusing/opening on this first
+    // click — otherwise the dropdown would flash open and be torn down by the
+    // re-render below. A second click (now the active row) opens it normally.
+    rowHeader.addEventListener("mousedown", (ev) => {
       if (currentId && currentId !== state.activeLorebookId) {
+        ev.preventDefault();
         state.activeLorebookId = currentId;
-        // Re-render after the click event finishes so the select can open.
+        state.entryFilter = ""; // fresh entry filter per lorebook
         setTimeout(renderLeft, 0);
       }
     });
 
-    const sel = document.createElement("select");
-    sel.className = "kaio-select";
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = isLast
-      ? (state.selectedLorebookIds.length ? "— Add another lorebook —" : "— Select a lorebook —")
-      : "— Remove this lorebook —";
-    sel.appendChild(blank);
-    for (const lb of items) {
-      const o = document.createElement("option");
-      o.value = lb.id;
-      o.textContent = lb.name || lb.id;
-      if (lb.id === currentId) o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.addEventListener("change", async (ev) => {
-      const newId = sel.value || null;
-      // Snapshot the original value so we can revert if guardDirty cancels.
-      if (await guardDirty() === false) {
-        sel.value = currentId || "";
-        ev.preventDefault();
-        return;
-      }
+    const lbCombo = renderSearchableSelect({
+      items: items.map((lb) => ({ id: lb.id, name: lb.name || lb.id })),
+      valueId: currentId,
+      placeholder: isLast
+        ? (state.selectedLorebookIds.length ? "— Add another lorebook —" : "— Select a lorebook —")
+        : "Lorebook",
+      blankLabel: isLast ? undefined : "— Remove this lorebook —",
+      ariaLabel: "Lorebook",
+      onChange: async (newId) => {
+        // guardDirty cancel: the combo auto-reverts since no re-render happens.
+        if (await guardDirty() === false) return;
       if (isLast) {
         // Adding a new lorebook
         if (!newId) return;
@@ -722,9 +757,11 @@ function renderLeft() {
         if (!state.lorebookEntries[newId]) await loadLorebookEntries(newId);
         if (!state.lorebookFolders[newId]) await loadLorebookFolders(newId);
       }
-      renderAll();
+        state.entryFilter = ""; // the active lorebook changed
+        renderAll();
+      },
     });
-    rowHeader.appendChild(sel);
+    rowHeader.appendChild(lbCombo);
     if (currentId) {
       const lbEditBtn = document.createElement("button");
       lbEditBtn.type = "button";
@@ -737,6 +774,26 @@ function renderLeft() {
         if (lb) inspectBlock({ kind: "lorebook-editor", id: "lorebook-editor-" + currentId, lorebook: lb });
       });
       rowHeader.appendChild(lbEditBtn);
+    }
+    // Entry-search toggle, only on the active row (the one showing its entries).
+    if (isActive) {
+      const searchBtn = document.createElement("button");
+      searchBtn.type = "button";
+      searchBtn.className = "kaio-folder-edit-btn kaio-entry-search-btn";
+      searchBtn.innerHTML = "🔍";
+      searchBtn.title = "Search entries in this lorebook";
+      if (state.entryFilterOpen) searchBtn.dataset.active = "true";
+      searchBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        state.entryFilterOpen = !state.entryFilterOpen;
+        if (!state.entryFilterOpen) state.entryFilter = "";
+        renderLeft();
+        if (state.entryFilterOpen) {
+          const si = overlayEl && overlayEl.querySelector(".kaio-entry-search-input");
+          if (si) si.focus();
+        }
+      });
+      rowHeader.appendChild(searchBtn);
     }
     row.appendChild(rowHeader);
 
@@ -790,7 +847,7 @@ function renderLeft() {
 }
 
 function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange, inline }) {
-  const wrap = inline ? document.createElement("div") : document.createElement("div");
+  const wrap = document.createElement("div");
   if (!inline) wrap.className = "kaio-source";
 
   const lab = document.createElement("div");
@@ -798,22 +855,199 @@ function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange
   lab.innerHTML = `<span class="kaio-source-icon">${icon}</span><span>${label}</span>`;
   wrap.appendChild(lab);
 
-  const sel = document.createElement("select");
-  sel.className = "kaio-select";
-  const blank = document.createElement("option");
-  blank.value = "";
-  blank.textContent = placeholder;
-  sel.appendChild(blank);
-  for (const it of items) {
-    const o = document.createElement("option");
-    o.value = it.id;
-    o.textContent = it.name || it.id;
-    if (it.id === valueId) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.addEventListener("change", () => onChange(sel.value || null));
-  wrap.appendChild(sel);
+  wrap.appendChild(renderSearchableSelect({
+    items,
+    valueId,
+    placeholder,
+    blankLabel: placeholder, // lets the user clear back to "none"
+    ariaLabel: label,
+    onChange,
+  }));
   return wrap;
+}
+
+// Searchable combobox used by every Sources picker. Type to filter; click,
+// Enter, or arrow keys + Enter to choose. Mirrors the old <select> contract:
+// onChange(id|null). Optional `blankLabel` adds a "clear" row at the top of the
+// list; optional `onOpen` fires when the list opens. Works on desktop and
+// mobile (tap to focus → on-screen keyboard filters the list).
+function renderSearchableSelect({ items, valueId, placeholder, blankLabel, onChange, onOpen, ariaLabel }) {
+  const root = document.createElement("div");
+  root.className = "kaio-combo";
+  root.dataset.open = "false";
+
+  const field = document.createElement("div");
+  field.className = "kaio-combo-field";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "kaio-combo-input";
+  input.autocomplete = "off";
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  input.placeholder = placeholder || "";
+  if (ariaLabel) input.setAttribute("aria-label", ariaLabel);
+  const caret = document.createElement("button");
+  caret.type = "button";
+  caret.className = "kaio-combo-caret";
+  caret.tabIndex = -1;
+  caret.setAttribute("aria-label", "Toggle list");
+  caret.textContent = "▾";
+  field.appendChild(input);
+  field.appendChild(caret);
+  root.appendChild(field);
+
+  const listEl = document.createElement("div");
+  listEl.className = "kaio-combo-list";
+  listEl.setAttribute("role", "listbox");
+  root.appendChild(listEl);
+
+  let selectedId = valueId || null;
+  let open = false;
+  let query = "";
+  let highlight = -1;
+  let opts = [];
+
+  const nameFor = (id) => {
+    if (!id) return "";
+    const it = items.find((x) => x.id === id);
+    return it ? (it.name || it.id) : "";
+  };
+  input.value = nameFor(selectedId);
+
+  function computeOpts() {
+    const q = query.trim().toLowerCase();
+    const out = [];
+    if (blankLabel) out.push({ id: "", name: blankLabel, blank: true });
+    for (const it of items) {
+      if (!q || (it.name || it.id).toLowerCase().includes(q)) out.push({ id: it.id, name: it.name || it.id });
+    }
+    return out;
+  }
+  function renderList() {
+    opts = computeOpts();
+    listEl.innerHTML = "";
+    if (!opts.length) {
+      const none = document.createElement("div");
+      none.className = "kaio-combo-empty";
+      none.textContent = "No matches";
+      listEl.appendChild(none);
+      return;
+    }
+    opts.forEach((o, i) => {
+      const row = document.createElement("div");
+      row.className = "kaio-combo-opt";
+      row.setAttribute("role", "option");
+      if (o.blank) row.dataset.blank = "true";
+      if (o.id && o.id === selectedId) row.dataset.selected = "true";
+      if (i === highlight) row.dataset.highlight = "true";
+      row.textContent = o.name;
+      row.addEventListener("mousedown", (ev) => {
+        ev.preventDefault(); // keep focus; let this fire before the blur
+        choose(o.id || null);
+      });
+      listEl.appendChild(row);
+    });
+  }
+  function scrollHighlight() {
+    const el = listEl.querySelector('[data-highlight="true"]');
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }
+  // The dropdown is absolutely positioned inside the scrollable Sources column,
+  // so it would be clipped near the column's edges. Pick the side with more
+  // room and cap the height to fit, so it always stays visible (e.g. the
+  // bottom-most Persona picker flips upward).
+  function positionList() {
+    root.dataset.drop = "down";
+    listEl.style.maxHeight = "240px";
+    const scroller = root.closest(".kaio-col-body");
+    if (!scroller) return;
+    const fr = field.getBoundingClientRect();
+    const sr = scroller.getBoundingClientRect();
+    const spaceBelow = sr.bottom - fr.bottom - 8;
+    const spaceAbove = fr.top - sr.top - 8;
+    const up = spaceBelow < 180 && spaceAbove > spaceBelow;
+    root.dataset.drop = up ? "up" : "down";
+    const avail = Math.max(120, Math.min(240, up ? spaceAbove : spaceBelow));
+    listEl.style.maxHeight = avail + "px";
+  }
+  function openList() {
+    if (open) return;
+    open = true;
+    root.dataset.open = "true";
+    input.setAttribute("aria-expanded", "true");
+    query = "";
+    highlight = -1;
+    renderList();
+    positionList();
+    input.select();
+    if (typeof onOpen === "function") onOpen();
+  }
+  function closeList(restore) {
+    if (!open) return;
+    open = false;
+    root.dataset.open = "false";
+    input.setAttribute("aria-expanded", "false");
+    if (restore) input.value = nameFor(selectedId);
+  }
+  async function choose(id) {
+    const before = selectedId;
+    closeList(false);
+    selectedId = id || null;
+    input.value = nameFor(selectedId);
+    input.blur();
+    await onChange(selectedId);
+    // If onChange didn't re-render (e.g. guardDirty cancelled the switch), this
+    // element is still in the DOM — revert the optimistic selection.
+    if (root.isConnected) {
+      selectedId = before;
+      input.value = nameFor(before);
+    }
+  }
+
+  input.addEventListener("focus", openList);
+  input.addEventListener("blur", () => { if (open) closeList(true); });
+  caret.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    if (open) { closeList(true); input.blur(); }
+    else input.focus(); // fires openList
+  });
+  input.addEventListener("input", () => {
+    query = input.value;
+    if (!open) openList();
+    highlight = -1;
+    renderList();
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      if (!open) { openList(); return; }
+      highlight = Math.min(opts.length - 1, highlight + 1);
+      renderList(); scrollHighlight();
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (!open) return;
+      highlight = Math.max(0, highlight - 1);
+      renderList(); scrollHighlight();
+    } else if (ev.key === "Enter") {
+      if (!open) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      let pick = highlight >= 0 ? opts[highlight] : null;
+      if (!pick) {
+        const nonBlank = opts.filter((o) => !o.blank);
+        if (nonBlank.length === 1) pick = nonBlank[0];
+      }
+      if (pick) choose(pick.id || null);
+    } else if (ev.key === "Escape") {
+      if (!open) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeList(true);
+      input.blur();
+    }
+  });
+
+  return root;
 }
 
 function renderEntryChecklist(lorebookId) {
@@ -841,6 +1075,37 @@ function renderEntryChecklist(lorebookId) {
   const checkedSet = state.selectedEntryIdsByLorebook[lorebookId];
   const folderSet = state.selectedFolderIdsByLorebook[lorebookId];
 
+  // Entry search box (toggled by the 🔍 in the lorebook row header). Filters
+  // the already-rendered rows in place so the input never loses focus.
+  if (state.entryFilterOpen) {
+    const search = document.createElement("div");
+    search.className = "kaio-entry-search";
+    const sicon = document.createElement("span");
+    sicon.className = "kaio-entry-search-icon";
+    sicon.textContent = "🔍";
+    const sinput = document.createElement("input");
+    sinput.type = "search";
+    sinput.className = "kaio-entry-search-input";
+    sinput.placeholder = "Filter entries by name or content…";
+    sinput.value = state.entryFilter || "";
+    sinput.setAttribute("aria-label", "Filter lorebook entries");
+    sinput.addEventListener("input", () => {
+      state.entryFilter = sinput.value;
+      applyEntryFilter(list, state.entryFilter);
+    });
+    sinput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && sinput.value) {
+        e.stopPropagation();
+        sinput.value = "";
+        state.entryFilter = "";
+        applyEntryFilter(list, "");
+      }
+    });
+    search.appendChild(sicon);
+    search.appendChild(sinput);
+    wrap.appendChild(search);
+  }
+
   // ── Folders at the top ────────────────────────
   const sortedFolders = [...folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   for (const folder of sortedFolders) {
@@ -849,6 +1114,7 @@ function renderEntryChecklist(lorebookId) {
 
     const item = document.createElement("div");
     item.className = "kaio-folder-item";
+    item.dataset.search = (folder.name || "").toLowerCase();
 
     const cb = document.createElement("input");
     cb.type = "checkbox";
@@ -867,6 +1133,7 @@ function renderEntryChecklist(lorebookId) {
       }
       renderLeft();
       renderMiddle();
+      persistSelection(); // entry/folder toggles don't go through renderAll
     });
     item.appendChild(cb);
 
@@ -916,6 +1183,7 @@ function renderEntryChecklist(lorebookId) {
   for (const e of sorted) {
     const item = document.createElement("label");
     item.className = "kaio-entry-item";
+    item.dataset.search = ((e.name || "") + " " + (e.content || "")).toLowerCase();
     const checked = checkedSet.has(e.id);
     const positionLabel = positionToLabel(e.position);
     const folder = e.folderId ? folders.find((f) => f.id === e.folderId) : null;
@@ -949,13 +1217,45 @@ function renderEntryChecklist(lorebookId) {
         }
       }
       renderMiddle();
+      persistSelection(); // entry/folder toggles don't go through renderAll
     });
     list.appendChild(item);
   }
 
   wrap.appendChild(list);
+  // Re-apply any active entry filter so it survives this re-render.
+  if (state.entryFilterOpen && state.entryFilter) applyEntryFilter(list, state.entryFilter);
   wrap.appendChild(renderCreateActions(lorebookId));
   return wrap;
+}
+
+// Hides entry/folder rows in a rendered checklist that don't match the query.
+// In-place (no re-render) so the search input keeps focus while typing.
+function applyEntryFilter(listEl, q) {
+  const query = (q || "").trim().toLowerCase();
+  const rows = listEl.querySelectorAll(".kaio-entry-item, .kaio-folder-item");
+  let anyVisible = false;
+  for (const el of rows) {
+    const show = !query || (el.dataset.search || "").includes(query);
+    el.hidden = !show;
+    if (show) anyVisible = true;
+  }
+  // The folder/entry divider only makes sense in the unfiltered view.
+  const divider = listEl.querySelector(".kaio-entrylist-divider");
+  if (divider) divider.hidden = !!query;
+  // "No matches" note.
+  let note = listEl.querySelector(".kaio-entrylist-nomatch");
+  if (query && !anyVisible) {
+    if (!note) {
+      note = document.createElement("div");
+      note.className = "kaio-entrylist-empty kaio-entrylist-nomatch";
+      listEl.appendChild(note);
+    }
+    note.textContent = "No entries match “" + query + "”.";
+    note.hidden = false;
+  } else if (note) {
+    note.hidden = true;
+  }
 }
 
 function renderCreateActions(lorebookId) {
@@ -1487,10 +1787,11 @@ function renderMiddle() {
   if (!middleBodyEl) return;
   middleBodyEl.innerHTML = "";
 
-  // The filter bar is only useful once a preset's blocks are on screen.
+  // The filter bar is only useful once a preset's blocks are on screen, and
+  // can be hidden via Settings.
   const searchRow = overlayEl && overlayEl.querySelector(".kaio-middle-search");
   const hasBlocks = !!(state.selectedPresetId && state.presetFull);
-  if (searchRow) searchRow.hidden = !hasBlocks;
+  if (searchRow) searchRow.hidden = !hasBlocks || !settingOn("showMiddleSearch");
 
   if (!state.selectedPresetId) {
     middleBodyEl.innerHTML = `
@@ -1545,38 +1846,32 @@ function blockMatchesFilter(block, q) {
   return hay.join("\n").toLowerCase().includes(q);
 }
 
-// Context-window size the gauge fills toward (rough; 0 hides the bar).
-function getTokenGaugeContext() {
-  const v = parseInt(getSettings().tokenGaugeContext, 10);
-  return Number.isFinite(v) && v > 0 ? v : 0;
-}
 // Renders the "~N tokens" readout + usage bar into the middle column header.
-// Pass null/empty to clear it (no preset, still loading, nothing to show).
+// Hidden entirely when token estimates are off, when there are no blocks, or
+// when there is no active connection (the gauge fills toward that connection's
+// Max Context Window, so without one there is nothing to fill toward).
 function renderTokenGauge(blocks) {
   if (!tokenGaugeEl) return;
-  if (!blocks || !blocks.length) {
+  if (!settingOn("showTokenEstimates") || !state.activeConnection || !blocks || !blocks.length) {
     tokenGaugeEl.innerHTML = "";
     tokenGaugeEl.dataset.empty = "true";
     return;
   }
   tokenGaugeEl.dataset.empty = "false";
   const total = totalPromptTokens(blocks);
-  const ctx = getTokenGaugeContext();
-  let html = `<span class="kaio-token-gauge-count">~${total.toLocaleString()} tokens</span>`;
-  if (ctx > 0) {
-    const ratio = total / ctx;
-    const pct = Math.min(100, Math.round(ratio * 100));
-    const level = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : "ok";
-    html +=
-      `<div class="kaio-token-gauge-bar" data-level="${level}" ` +
-      `title="≈${total.toLocaleString()} of ${ctx.toLocaleString()} tokens (${Math.round(ratio * 100)}%)">` +
-      `<div class="kaio-token-gauge-fill" style="width:${pct}%"></div></div>` +
-      `<span class="kaio-token-gauge-pct" data-level="${level}">${Math.round(ratio * 100)}%</span>`;
-  }
-  html +=
+  const ctx = state.activeConnection.maxContext;
+  const label = state.activeConnection.label;
+  const ratio = total / ctx;
+  const pct = Math.min(100, Math.round(ratio * 100));
+  const level = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : "ok";
+  tokenGaugeEl.innerHTML =
+    `<span class="kaio-token-gauge-count">~${total.toLocaleString()} tokens</span>` +
+    `<div class="kaio-token-gauge-bar" data-level="${level}" ` +
+    `title="≈${total.toLocaleString()} of ${ctx.toLocaleString()} tokens (${Math.round(ratio * 100)}%) — context window of ${escapeHTML(label)}">` +
+    `<div class="kaio-token-gauge-fill" style="width:${pct}%"></div></div>` +
+    `<span class="kaio-token-gauge-pct" data-level="${level}">${Math.round(ratio * 100)}%</span>` +
     `<span class="kaio-token-gauge-info" ` +
-    `title="Rough estimate (~4 characters per token). Excludes the live chat transcript (injected at runtime) and any wrap formatting.">ⓘ</span>`;
-  tokenGaugeEl.innerHTML = html;
+    `title="Rough estimate (~4 characters per token) against the active connection's Max Context Window (${ctx.toLocaleString()}). Excludes the live chat transcript (injected at runtime) and any wrap formatting.">ⓘ</span>`;
 }
 
 // Returns a Set of entry IDs whose `order` collides with another displayed
@@ -1835,18 +2130,18 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     orderHTML = `<span class="kaio-block-order"${isOverlapping ? ' data-overlap="true"' : ''}>order ${ord}${isOverlapping ? ' — OVERLAPPING!' : ''}</span>`;
   }
 
-  // Group badge for sections/markers that belong to a group
+  // Group badge for sections/markers that belong to a group (toggleable)
   let groupHTML = "";
-  if (block.section && block.section.groupId && state.presetFull && state.presetFull.groups) {
+  if (settingOn("showGroupBadges") && block.section && block.section.groupId && state.presetFull && state.presetFull.groups) {
     const group = state.presetFull.groups.find((g) => g.id === block.section.groupId);
     if (group) {
       groupHTML = `<span class="kaio-group-badge">${escapeHTML(group.name || "Group")}</span>`;
     }
   }
 
-  // Folder badge for lorebook entries that belong to a folder
+  // Folder badge for lorebook entries that belong to a folder (toggleable)
   let folderHTML = "";
-  if (block.kind === "lorebook-entry" && block.entry.folderId) {
+  if (settingOn("showFolderBadges") && block.kind === "lorebook-entry" && block.entry.folderId) {
     const lbId = block.entry.lorebookId;
     const folders = (lbId && state.lorebookFolders[lbId]) || [];
     const folder = folders.find((f) => f.id === block.entry.folderId);
@@ -1872,8 +2167,10 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     ? `<span class="kaio-block-head-hint">${escapeHTML(headHint)}</span>`
     : "";
 
-  // Rough per-block token estimate (skipped for empty / runtime blocks).
-  const tok = blockOwnTokens(block);
+  // Rough per-block token estimate — shown only with token estimates enabled
+  // and an active connection (matching the header gauge), skipped for empty /
+  // runtime blocks.
+  const tok = (settingOn("showTokenEstimates") && state.activeConnection) ? blockOwnTokens(block) : 0;
   const tokenHTML = tok > 0
     ? `<span class="kaio-block-tokens" title="≈${tok} tokens (rough estimate, ~4 characters each)">~${tok}</span>`
     : "";
@@ -4326,7 +4623,11 @@ const KAIO_SETTINGS_KEY = "kaio-settings";
 const KAIO_DEFAULT_SETTINGS = {
   connectionlessHistoryLimit: 0,
   inspectHistoryDefault: "ask",
-  tokenGaugeContext: 8192,
+  // Simulated Prompt column — clutter toggles (default on).
+  showMiddleSearch: true,
+  showTokenEstimates: true,
+  showGroupBadges: true,
+  showFolderBadges: true,
   piShowRoleLabels: false,
   piColorSystem: "#22d3ee",    // cyan
   piColorAssistant: "#e879f9", // magenta
@@ -4345,6 +4646,10 @@ function setSetting(key, value) {
   const s = getSettings();
   s[key] = value;
   try { localStorage.setItem(KAIO_SETTINGS_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+}
+// Boolean settings are ON unless explicitly stored false (safe default-on).
+function settingOn(key) {
+  return getSettings()[key] !== false;
 }
 
 function showSettings() {
@@ -4378,10 +4683,32 @@ function showSettings() {
           <input id="kaio-set-histlimit" type="number" min="0" step="1" class="kaio-set-input" data-set="historyLimit" />
           <div class="kaio-set-hint">When a chat has no API connection, the Prompt Inspector inserts the raw chat history. This caps how many of the most recent turns are shown. <strong>0 = all.</strong></div>
         </div>
+        <div class="kaio-set-divider"></div>
+        <div class="kaio-set-group-label">Simulated Prompt column</div>
         <div class="kaio-set-field">
-          <label class="kaio-set-label" for="kaio-set-ctxsize">Token gauge — context window size</label>
-          <input id="kaio-set-ctxsize" type="number" min="0" step="256" class="kaio-set-input" data-set="ctxSize" />
-          <div class="kaio-set-hint">The Simulated Prompt header shows a rough token estimate (~4 chars each) and a usage bar filling toward this size. Set it to your model's context length. <strong>0 = hide the bar</strong> (the count still shows).</div>
+          <label class="kaio-set-checkrow">
+            <input type="checkbox" data-set="showSearch" />
+            <span class="kaio-set-label">Show the filter / search bar</span>
+          </label>
+        </div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-checkrow">
+            <input type="checkbox" data-set="showTokens" />
+            <span class="kaio-set-label">Show token estimates</span>
+          </label>
+          <div class="kaio-set-hint">Per-block estimates and the context-usage gauge. <strong>Requires an active API connection</strong> — the gauge fills toward that connection's Max Context Window, so with no connection no estimates appear regardless of this toggle.</div>
+        </div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-checkrow">
+            <input type="checkbox" data-set="showGroups" />
+            <span class="kaio-set-label">Show group badges on prompt sections</span>
+          </label>
+        </div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-checkrow">
+            <input type="checkbox" data-set="showFolders" />
+            <span class="kaio-set-label">Show folder badges on lorebook entries</span>
+          </label>
         </div>
         <div class="kaio-set-divider"></div>
         <div class="kaio-set-group-label">Prompt Inspector appearance</div>
@@ -4423,15 +4750,30 @@ function showSettings() {
   };
   input.addEventListener("change", commit);
 
-  const ctxSize = bg.querySelector('[data-set="ctxSize"]');
-  ctxSize.value = String(s.tokenGaugeContext ?? KAIO_DEFAULT_SETTINGS.tokenGaugeContext);
-  ctxSize.addEventListener("change", () => {
-    let v = parseInt(ctxSize.value, 10);
-    if (!Number.isFinite(v) || v < 0) v = 0;
-    ctxSize.value = String(v);
-    setSetting("tokenGaugeContext", v);
-    renderMiddle(); // refresh the gauge against the new context size
-  });
+  // Simulated Prompt column toggles — each re-renders the middle column live.
+  const colToggles = {
+    showSearch: "showMiddleSearch",
+    showTokens: "showTokenEstimates",
+    showGroups: "showGroupBadges",
+    showFolders: "showFolderBadges",
+  };
+  for (const attr of Object.keys(colToggles)) {
+    const key = colToggles[attr];
+    const el = bg.querySelector('[data-set="' + attr + '"]');
+    el.checked = s[key] !== false; // default on
+    el.addEventListener("change", () => {
+      setSetting(key, el.checked);
+      // Turning the search bar off should not strand an active filter.
+      if (attr === "showSearch" && !el.checked) {
+        state.middleFilter = "";
+        const fi = overlayEl && overlayEl.querySelector('[data-action="filter"]');
+        const fc = overlayEl && overlayEl.querySelector('[data-action="filter-clear"]');
+        if (fi) fi.value = "";
+        if (fc) fc.hidden = true;
+      }
+      renderMiddle();
+    });
+  }
 
   const roleLabels = bg.querySelector('[data-set="roleLabels"]');
   roleLabels.checked = !!s.piShowRoleLabels;
@@ -4749,7 +5091,7 @@ function showPromptInspectorModal(messages, meta) {
     badge.textContent = meta.note ? "Raw chat history · no connection" : "Structural preview · console selection";
     badge.dataset.mode = "structural";
   }
-  if (messages.length && meta.mode !== "error") {
+  if (settingOn("showTokenEstimates") && messages.length && meta.mode !== "error") {
     const piTokens = messages.reduce((n, m) => n + estimateTokens(m.content || ""), 0);
     badge.textContent += " · ~" + piTokens.toLocaleString() + " tok";
   }
