@@ -557,9 +557,15 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.4375rem 0.5625rem;
+  /* Nested folders are indented by --kaio-depth (set in JS). */
+  padding-left: calc(0.5625rem + var(--kaio-depth, 0) * 1.05rem);
   border-bottom: 1px solid var(--border, #27272a);
   font-size: 0.6875rem;
   user-select: none;
+}
+/* Subtle guide line on nested folder rows. */
+.kaio-folder-item[style*="--kaio-depth"] {
+  box-shadow: inset 1px 0 0 var(--border, #27272a);
 }
 .kaio-folder-item:first-child {
   border-top-left-radius: 0.5rem;

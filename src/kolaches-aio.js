@@ -34,6 +34,16 @@ async function api(method, path, body) {
   return ct.includes("application/json") ? r.json() : null;
 }
 
+// Pull a human-readable message out of an api() error. api() throws
+// `METHOD path → STATUS: <body>`, where <body> is usually {"error":"..."}.
+function serverErrorText(err, fallback) {
+  const m = (err && err.message) || "";
+  const match = m.match(/"error"\s*:\s*"([^"]+)"/);
+  if (match) return match[1];
+  const after = m.split("→")[1];
+  return (after && after.trim()) ? (fallback + " — " + after.trim().slice(0, 100)) : fallback;
+}
+
 const tryParseJSON = (s, fallback) => {
   if (s !== null && s !== undefined && typeof s !== "string") return s;
   if (typeof s !== "string" || !s.length) return fallback;
@@ -531,6 +541,35 @@ async function loadLorebookFolders(id) {
     console.error(e); return [];
   });
   state.lorebookFolders[id] = Array.isArray(list) ? list : [];
+}
+// Folder-tree helpers (folders nest via parentFolderId; null = top level).
+// Cycle-guarded against malformed data even though the engine forbids cycles.
+function folderDescendantIds(folders, rootId) {
+  const byParent = new Map();
+  for (const f of folders) {
+    const p = f.parentFolderId || null;
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p).push(f);
+  }
+  const out = new Set();
+  const stack = [rootId];
+  while (stack.length) {
+    const id = stack.pop();
+    for (const child of (byParent.get(id) || [])) {
+      if (!out.has(child.id)) { out.add(child.id); stack.push(child.id); }
+    }
+  }
+  return out;
+}
+function folderAncestorIds(folders, id) {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const out = new Set();
+  let cur = byId.get(id);
+  while (cur && cur.parentFolderId && !out.has(cur.parentFolderId)) {
+    out.add(cur.parentFolderId);
+    cur = byId.get(cur.parentFolderId);
+  }
+  return out;
 }
 async function loadCharacter(id) {
   const c = await api("GET", "/characters/" + id).catch((e) => {
@@ -1106,15 +1145,28 @@ function renderEntryChecklist(lorebookId) {
     wrap.appendChild(search);
   }
 
-  // ── Folders at the top ────────────────────────
-  const sortedFolders = [...folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  for (const folder of sortedFolders) {
+  // ── Folders at the top (nested tree, indented by depth) ──────
+  const byParent = new Map(); // parentId|null → folder[]
+  const folderIds = new Set(folders.map((f) => f.id));
+  for (const f of folders) {
+    // A missing/dangling parent is treated as root so orphans still show.
+    const p = (f.parentFolderId && folderIds.has(f.parentFolderId)) ? f.parentFolderId : null;
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p).push(f);
+  }
+  for (const arr of byParent.values()) arr.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  const visited = new Set();
+  const renderFolderRow = (folder, depth) => {
+    if (visited.has(folder.id)) return; // guard against malformed cycles
+    visited.add(folder.id);
     const folderEntries = entries.filter((e) => e.folderId === folder.id);
     const isChecked = folderSet.has(folder.id);
 
     const item = document.createElement("div");
     item.className = "kaio-folder-item";
     item.dataset.search = (folder.name || "").toLowerCase();
+    if (depth > 0) item.style.setProperty("--kaio-depth", String(depth));
 
     const cb = document.createElement("input");
     cb.type = "checkbox";
@@ -1169,10 +1221,15 @@ function renderEntryChecklist(lorebookId) {
     item.appendChild(editBtn);
 
     list.appendChild(item);
-  }
+
+    for (const child of (byParent.get(folder.id) || [])) renderFolderRow(child, depth + 1);
+  };
+  for (const root of (byParent.get(null) || [])) renderFolderRow(root, 0);
+  // Safety net: surface any folder not reached above (e.g. a data cycle).
+  for (const f of folders) renderFolderRow(f, 0);
 
   // Divider between folders and entries
-  if (sortedFolders.length && entries.length) {
+  if (folders.length && entries.length) {
     const divider = document.createElement("div");
     divider.className = "kaio-entrylist-divider";
     list.appendChild(divider);
@@ -2464,6 +2521,7 @@ function makeDraft(block) {
           name: block.folder.name || "",
           enabled: block.folder.enabled !== false,
           order: block.folder.order ?? 0,
+          parentFolderId: block.folder.parentFolderId || "",
         },
       };
     case "preset-editor":
@@ -2726,16 +2784,28 @@ function renderRight() {
       rightBodyEl.appendChild(renderLorebookEditorPanel());
       break;
 
-    case "folder":
+    case "folder": {
       rightBodyEl.appendChild(sectionHeader("Basic"));
       rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
       rightBodyEl.appendChild(checkboxField("Enabled", f.enabled, "enabled",
-        "When disabled, all entries in this folder are excluded from activation regardless of their individual enabled state."));
+        "When disabled, all entries in this folder — and in any folder nested inside it — are excluded from activation, regardless of their individual enabled state."));
       rightBodyEl.appendChild(numberField("Order", f.order, "order",
-        "Display order among folders. Lower values appear first."));
+        "Display order among sibling folders. Lower values appear first."));
+      // Parent folder — any folder except this one and its own descendants.
+      const allFolders = state.lorebookFolders[d.lorebookId] || [];
+      const descendants = folderDescendantIds(allFolders, d.sourceId);
+      const parentOptions = [["", "— None (top level) —"]];
+      for (const fo of allFolders) {
+        if (fo.id === d.sourceId || descendants.has(fo.id)) continue;
+        parentOptions.push([fo.id, fo.name || "(unnamed folder)"]);
+      }
+      rightBodyEl.appendChild(selectField("Parent folder", f.parentFolderId || "", "parentFolderId", parentOptions,
+        "Nest this folder inside another. A disabled parent disables this folder's entries too. Can't pick this folder or one nested inside it."));
+      rightBodyEl.appendChild(renderFolderChildren(d.sourceId, d.lorebookId));
       rightBodyEl.appendChild(renderFolderEntries(d.sourceId, d.lorebookId));
       rightBodyEl.appendChild(renderFolderBatchAdd(d.sourceId, d.lorebookId));
       break;
+    }
   }
 
   // Footer with Save/Revert
@@ -3158,6 +3228,89 @@ function folderSelectField(lorebookId, currentValue) {
   return selectField("Folder", currentValue || "", "folderId", options);
 }
 
+// Child-folders multiselect (mirrors renderFolderEntries but for folder
+// nesting). Toggling a checkbox immediately re-parents that folder via PATCH.
+function renderFolderChildren(folderId, lorebookId) {
+  const wrap = document.createElement("div");
+  wrap.appendChild(sectionHeader("Child folders"));
+  const folders = state.lorebookFolders[lorebookId] || [];
+  const ancestors = folderAncestorIds(folders, folderId);
+  // Eligible = any folder except this one and its ancestors (avoids cycles;
+  // the engine also rejects invalid moves with a 400).
+  const eligible = folders.filter((f) => f.id !== folderId && !ancestors.has(f.id));
+  if (!eligible.length) {
+    const help = document.createElement("div");
+    help.className = "kaio-field-help";
+    help.textContent = "No other folders available to nest here.";
+    wrap.appendChild(help);
+    return wrap;
+  }
+  const help = document.createElement("div");
+  help.className = "kaio-field-help";
+  help.textContent = "Check a folder to nest it directly inside this one.";
+  wrap.appendChild(help);
+
+  const list = document.createElement("div");
+  list.className = "kaio-batch-list";
+  // Current children first, then alphabetical.
+  const sorted = [...eligible].sort((a, b) => {
+    const ac = a.parentFolderId === folderId ? 0 : 1;
+    const bc = b.parentFolderId === folderId ? 0 : 1;
+    if (ac !== bc) return ac - bc;
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  for (const fo of sorted) {
+    const row = document.createElement("label");
+    row.className = "kaio-batch-item";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = fo.parentFolderId === folderId;
+    cb.addEventListener("change", async () => {
+      // Commit/revert any staged folder edit first so the eligibility tree and
+      // the staged Parent value can't diverge (mirrors the checklist toggles).
+      if (await guardDirty() === false) { cb.checked = !cb.checked; return; }
+      cb.disabled = true;
+      try {
+        await api("PATCH", "/lorebooks/" + lorebookId + "/folders/" + fo.id,
+          { parentFolderId: cb.checked ? folderId : null });
+        await loadLorebookFolders(lorebookId);
+        // Keep the inspected folder pointing at a live object + clean draft.
+        if (state.inspecting && state.inspecting.kind === "folder" && state.inspecting.folder) {
+          const fresh = (state.lorebookFolders[lorebookId] || []).find((f) => f.id === state.inspecting.folder.id);
+          if (fresh) {
+            state.inspecting.folder = fresh;
+            state.draft = makeDraft(state.inspecting);
+            state.isDirty = false;
+          }
+        }
+        renderAll();
+        showToast(cb.checked ? "Folder nested" : "Folder detached", "info");
+      } catch (err) {
+        console.error("[kolache-AIO] Re-parent folder failed", err);
+        showToast(serverErrorText(err, "Couldn't move folder"), "error");
+        cb.checked = !cb.checked;
+        cb.disabled = false;
+      }
+    });
+    row.appendChild(cb);
+    const nameEl = document.createElement("span");
+    nameEl.className = "kaio-batch-item-name";
+    nameEl.textContent = fo.name || "(unnamed folder)";
+    row.appendChild(nameEl);
+    // Note the current parent for folders nested elsewhere.
+    if (fo.parentFolderId && fo.parentFolderId !== folderId) {
+      const owner = folders.find((x) => x.id === fo.parentFolderId);
+      const tag = document.createElement("span");
+      tag.className = "kaio-batch-nested-folder";
+      tag.textContent = owner ? ("in: " + (owner.name || "folder")) : "nested";
+      row.appendChild(tag);
+    }
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function renderFolderEntries(folderId, lorebookId) {
   const wrap = document.createElement("div");
   const entries = (state.lorebookEntries[lorebookId] || []).filter((e) => e.folderId === folderId);
@@ -3517,7 +3670,12 @@ async function saveDraft() {
         return;
       }
       case "folder": {
-        const body = { name: d.fields.name, enabled: d.fields.enabled, order: Number(d.fields.order) };
+        const body = {
+          name: d.fields.name,
+          enabled: d.fields.enabled,
+          order: Number(d.fields.order),
+          parentFolderId: d.fields.parentFolderId || null,
+        };
         await api("PATCH", "/lorebooks/" + d.lorebookId + "/folders/" + d.sourceId, body);
         await loadLorebookFolders(d.lorebookId);
         const freshFolder = (state.lorebookFolders[d.lorebookId] || []).find((f) => f.id === d.sourceId);
@@ -3544,7 +3702,7 @@ async function saveDraft() {
     showToast("Saved ✓", "success");
   } catch (err) {
     console.error("[kolache-AIO] Save failed", err);
-    showToast("Save failed — see console", "error");
+    showToast(serverErrorText(err, "Save failed — see console"), "error");
   }
 }
 async function deleteInspected() {
