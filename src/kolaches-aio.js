@@ -137,6 +137,7 @@ const state = {
 let overlayEl = null;
 let leftBodyEl = null;
 let middleBodyEl = null;
+let tokenGaugeEl = null;
 let rightBodyEl = null;
 let rightFooterEl = null;
 let toastEl = null;
@@ -309,6 +310,7 @@ function buildConsole() {
                 </button>
               </div>
             </div>
+            <div class="kaio-token-gauge" data-region="token-gauge" data-empty="true"></div>
           </header>
           <div class="kaio-col-body" data-region="middle"></div>
         </section>
@@ -328,6 +330,7 @@ function buildConsole() {
 
   leftBodyEl    = overlayEl.querySelector('[data-region="left"]');
   middleBodyEl  = overlayEl.querySelector('[data-region="middle"]');
+  tokenGaugeEl  = overlayEl.querySelector('[data-region="token-gauge"]');
   rightBodyEl   = overlayEl.querySelector('[data-region="right"]');
   rightFooterEl = overlayEl.querySelector('[data-region="right-footer"]');
   toastEl       = overlayEl.querySelector('[data-region="toast"]');
@@ -1467,6 +1470,7 @@ function renderMiddle() {
   const blocks = buildSimulatedPrompt();
   if (!blocks.length) {
     middleBodyEl.innerHTML = `<div class="kaio-middle-empty"><div>This preset has no enabled sections.</div></div>`;
+    renderTokenGauge(null);
     return;
   }
 
@@ -1474,6 +1478,41 @@ function renderMiddle() {
   for (const b of blocks) {
     middleBodyEl.appendChild(renderBlock(b, overlaps));
   }
+  renderTokenGauge(blocks);
+}
+
+// Context-window size the gauge fills toward (rough; 0 hides the bar).
+function getTokenGaugeContext() {
+  const v = parseInt(getSettings().tokenGaugeContext, 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+// Renders the "~N tokens" readout + usage bar into the middle column header.
+// Pass null/empty to clear it (no preset, still loading, nothing to show).
+function renderTokenGauge(blocks) {
+  if (!tokenGaugeEl) return;
+  if (!blocks || !blocks.length) {
+    tokenGaugeEl.innerHTML = "";
+    tokenGaugeEl.dataset.empty = "true";
+    return;
+  }
+  tokenGaugeEl.dataset.empty = "false";
+  const total = totalPromptTokens(blocks);
+  const ctx = getTokenGaugeContext();
+  let html = `<span class="kaio-token-gauge-count">~${total.toLocaleString()} tokens</span>`;
+  if (ctx > 0) {
+    const ratio = total / ctx;
+    const pct = Math.min(100, Math.round(ratio * 100));
+    const level = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : "ok";
+    html +=
+      `<div class="kaio-token-gauge-bar" data-level="${level}" ` +
+      `title="≈${total.toLocaleString()} of ${ctx.toLocaleString()} tokens (${Math.round(ratio * 100)}%)">` +
+      `<div class="kaio-token-gauge-fill" style="width:${pct}%"></div></div>` +
+      `<span class="kaio-token-gauge-pct" data-level="${level}">${Math.round(ratio * 100)}%</span>`;
+  }
+  html +=
+    `<span class="kaio-token-gauge-info" ` +
+    `title="Rough estimate (~4 characters per token). Excludes the live chat transcript (injected at runtime) and any wrap formatting.">ⓘ</span>`;
+  tokenGaugeEl.innerHTML = html;
 }
 
 // Returns a Set of entry IDs whose `order` collides with another displayed
@@ -1769,6 +1808,12 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     ? `<span class="kaio-block-head-hint">${escapeHTML(headHint)}</span>`
     : "";
 
+  // Rough per-block token estimate (skipped for empty / runtime blocks).
+  const tok = blockOwnTokens(block);
+  const tokenHTML = tok > 0
+    ? `<span class="kaio-block-tokens" title="≈${tok} tokens (rough estimate, ~4 characters each)">~${tok}</span>`
+    : "";
+
   head.innerHTML = `
     <span class="kaio-block-tag" data-kind="${block.kind}">${tagText}</span>
     <span class="kaio-block-name">${escapeHTML(blockTitle(block))}</span>
@@ -1777,6 +1822,7 @@ function renderBlockHead(block, { isOverlapping, isSubblock, headHint }) {
     ${folderHTML}
     ${orderHTML}
     ${disabledHTML}
+    ${tokenHTML}
     ${depthLabel}
     ${role && !isSubblock ? `<span class="kaio-block-role">${escapeHTML(role)}</span>` : ""}
   `;
@@ -1831,6 +1877,35 @@ function blockPreviewRaw(block) {
     return [p.description, p.personality, p.scenario].filter(Boolean).join("\n\n");
   }
   return "";
+}
+
+// ── Token estimation (rough heuristic: ~4 characters per token) ──
+// Not a real tokenizer — providers differ — but close enough to gauge how
+// much of the context window the static prompt fills.
+function estimateTokens(text) {
+  const s = String(text || "");
+  return s ? Math.ceil(s.length / 4) : 0;
+}
+// A single block's own resolved text (no descent into a chat-history block's
+// depth sub-blocks). Markers and the chat-history shell carry no static text.
+function blockOwnTokens(block) {
+  if (!block || block.kind === "chat-history" || block.kind === "marker") return 0;
+  return estimateTokens(blockPreviewRaw(block));
+}
+// Total across the simulated prompt, descending into the depth-injected
+// sections/entries a chat-history block carries. The chat-history placeholder
+// itself is excluded — the real transcript is injected at runtime.
+function totalPromptTokens(blocks) {
+  let total = 0;
+  for (const b of blocks || []) {
+    if (b.kind === "chat-history") {
+      for (const s of b.depthSections || []) total += estimateTokens(s.content || "");
+      for (const e of b.depthEntries || []) total += estimateTokens(e.content || "");
+    } else {
+      total += blockOwnTokens(b);
+    }
+  }
+  return total;
 }
 // Build the HTML body for a block's preview, applying variable substitution
 // and respecting per-block expansion state. Returns "" for empty content.
@@ -4187,6 +4262,7 @@ const KAIO_SETTINGS_KEY = "kaio-settings";
 const KAIO_DEFAULT_SETTINGS = {
   connectionlessHistoryLimit: 0,
   inspectHistoryDefault: "ask",
+  tokenGaugeContext: 8192,
   piShowRoleLabels: false,
   piColorSystem: "#22d3ee",    // cyan
   piColorAssistant: "#e879f9", // magenta
@@ -4238,6 +4314,11 @@ function showSettings() {
           <input id="kaio-set-histlimit" type="number" min="0" step="1" class="kaio-set-input" data-set="historyLimit" />
           <div class="kaio-set-hint">When a chat has no API connection, the Prompt Inspector inserts the raw chat history. This caps how many of the most recent turns are shown. <strong>0 = all.</strong></div>
         </div>
+        <div class="kaio-set-field">
+          <label class="kaio-set-label" for="kaio-set-ctxsize">Token gauge — context window size</label>
+          <input id="kaio-set-ctxsize" type="number" min="0" step="256" class="kaio-set-input" data-set="ctxSize" />
+          <div class="kaio-set-hint">The Simulated Prompt header shows a rough token estimate (~4 chars each) and a usage bar filling toward this size. Set it to your model's context length. <strong>0 = hide the bar</strong> (the count still shows).</div>
+        </div>
         <div class="kaio-set-divider"></div>
         <div class="kaio-set-group-label">Prompt Inspector appearance</div>
         <div class="kaio-set-field">
@@ -4277,6 +4358,16 @@ function showSettings() {
     setSetting("connectionlessHistoryLimit", v);
   };
   input.addEventListener("change", commit);
+
+  const ctxSize = bg.querySelector('[data-set="ctxSize"]');
+  ctxSize.value = String(s.tokenGaugeContext ?? KAIO_DEFAULT_SETTINGS.tokenGaugeContext);
+  ctxSize.addEventListener("change", () => {
+    let v = parseInt(ctxSize.value, 10);
+    if (!Number.isFinite(v) || v < 0) v = 0;
+    ctxSize.value = String(v);
+    setSetting("tokenGaugeContext", v);
+    renderMiddle(); // refresh the gauge against the new context size
+  });
 
   const roleLabels = bg.querySelector('[data-set="roleLabels"]');
   roleLabels.checked = !!s.piShowRoleLabels;
@@ -4593,6 +4684,10 @@ function showPromptInspectorModal(messages, meta) {
   } else {
     badge.textContent = meta.note ? "Raw chat history · no connection" : "Structural preview · console selection";
     badge.dataset.mode = "structural";
+  }
+  if (messages.length && meta.mode !== "error") {
+    const piTokens = messages.reduce((n, m) => n + estimateTokens(m.content || ""), 0);
+    badge.textContent += " · ~" + piTokens.toLocaleString() + " tok";
   }
 
   const body = bg.querySelector(".kaio-pi-body");
