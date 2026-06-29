@@ -165,6 +165,7 @@ Marinara runs the JS inside a function that receives a `marinara` helper API (`o
 
 ## What this does **not** do (yet)
 
+- **Multi-character / group chats aren't supported yet** — the console assembles the prompt for a single character at a time, so group composition (multiple character cards in one chat) isn't reflected in the Simulated Prompt. **Coming soon.**
 - **Agents are skipped in the Simulated Prompt** — it shows preset sections, lorebook entries, character, persona, and chat-history placeholders. (The live **Inspect** capture *does* include whatever the engine actually assembles, agents and all.)
 - **Runtime markers** (`chat_history`, `chat_summary`, `dialogue_examples`, `agent_data`) are read-only placeholders — their content is dynamic.
 - **The Simulated Prompt doesn't yet model the disabled-*ancestor* folder rule** — at generation time the engine excludes every entry in a disabled folder's whole subtree; the structural preview reflects a folder's own disabled state but not (yet) inherited disabling from a parent.
