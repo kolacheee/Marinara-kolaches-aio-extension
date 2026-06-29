@@ -4,8 +4,7 @@ A single console for [Marinara Engine](https://github.com/Pasta-Devs/Marinara-En
 
 It exists to kill the back-and-forth: instead of bouncing between five separate editors to figure out why an entry isn't firing where you expected, you see the whole prompt assemble in front of you and click what you want to change.
 
-> 🖼️ **Screenshot** · `docs/screenshots/console-overview.png`
-> _The full three-column console with a preset, a couple of lorebooks, a character, and a persona selected — Sources (left), Simulated Prompt (middle), Editor (right)._
+<img width="1475" height="860" alt="image" src="https://github.com/user-attachments/assets/72d8e1a1-6e3a-4255-b020-6721ebeec9f2" />
 
 ---
 
@@ -45,8 +44,7 @@ Type-to-filter comboboxes for **Preset**, **Character**, and **Persona**, plus a
 - Add as many lorebooks as you like — each gets its own row, and only the active one expands its checklist (keeps the column compact).
 - Your selection is **remembered** between sessions and restored when you reopen the console.
 
-> 🖼️ **Screenshot** · `docs/screenshots/sources-combobox.png`
-> _A Sources dropdown open with text typed, showing the autocomplete-filtered list._
+<img width="273" height="121" alt="image" src="https://github.com/user-attachments/assets/c30ad9b9-f467-4478-8e11-0fb0ad050234" />
 
 ### Entry & folder checklist
 
@@ -54,8 +52,7 @@ Expanding a lorebook shows its **folders at the top** (📁 icon, entry-count ba
 
 **Folders nest.** Child folders are indented beneath their parents, so the hierarchy is visible at a glance.
 
-> 🖼️ **Screenshot** · `docs/screenshots/sources-nested-folders.png`
-> _A lorebook expanded with nested (indented) child folders and the 🔍 entry filter open._
+<img width="278" height="287" alt="image" src="https://github.com/user-attachments/assets/e11bbfa0-1441-4eb7-b228-9b8a1cb69aa3" />
 
 ---
 
@@ -70,8 +67,7 @@ Every selected piece, rendered in the order the engine would build it: preset se
 - **Drag-and-drop** sections / markers / chat-history to reorder — the new order saves to the preset's `sectionOrder`.
 - **Expand / Compress** appears on blocks longer than three lines or 600 characters.
 
-> 🖼️ **Screenshot** · `docs/screenshots/simulated-prompt.png`
-> _The middle column: the token gauge + filter bar in the header, with a few assembled blocks (one grouped, one foldered, one disabled)._
+<img width="801" height="755" alt="image" src="https://github.com/user-attachments/assets/cabf5a14-e881-42bf-be06-193ac4e3779d" />
 
 ---
 
@@ -84,9 +80,6 @@ Click any block (or a folder) to edit its fields on the right. **Save / Revert /
 - **Folder Editor** — Name, Enabled, Order, a **Parent folder** dropdown and a **Child folders** multiselect for nesting, the list of entries in the folder (with Remove), and a batch-add checklist for unassigned entries.
 - **Entry Editor** — every field the engine supports, in collapsibles: *Basic* (name, content, description, primary/secondary keys, position/depth/order, role, enabled, a 3-state Normal/Selective/Constant matching selector, plus prevent-recursion and locked), *Matching options*, *Context filters*, *Additional matching sources*, *Timing*, and *Group & Tag*. Field labels carry `?` tooltips. (Depth/Order only show for `depth`-positioned sections, since they do nothing for `ordered` ones.)
 - **Preset variables panel** — when a block references the preset's variables, a panel appears at the top: pick an option to substitute it live in the Simulated Prompt, and edit the value in place to write it back.
-
-> 🖼️ **Screenshot** · `docs/screenshots/folder-editor-nesting.png`
-> _The Folder Editor showing the Parent-folder dropdown and the Child-folders multiselect._
 
 ---
 
@@ -101,8 +94,8 @@ The **Inspect** button (titlebar, next to *Reload*) captures the prompt as it wo
 - **¶ Line breaks** marks every newline (remembered). **Copy** grabs readable text; **Copy JSON** grabs the messages array chat-completion APIs actually receive. Multimodal turns are annotated with image/file counts.
 - On failure, the modal shows the actual HTTP status + body with a cause hint.
 
-> 🖼️ **Screenshot** · `docs/screenshots/prompt-inspector.png`
-> _The Prompt Inspector modal with role colour-coding and the JSON / plaintext + Copy buttons._
+<img width="973" height="694" alt="image" src="https://github.com/user-attachments/assets/5dbd2073-68ed-4b22-8688-df5a57502750" />
+<img width="972" height="692" alt="image" src="https://github.com/user-attachments/assets/e6a9c097-4136-441c-9e51-f1c91bb53d9e" />
 
 ---
 
@@ -115,8 +108,7 @@ The **⚙️** button (titlebar, between *Reload* and *Close*) opens settings, p
 - **Simulated Prompt column** — toggle the filter bar, token estimates, group badges, and folder badges (all on by default).
 - **Prompt Inspector appearance** — text role labels on/off, the three role colours, and the role border thickness.
 
-> 🖼️ **Screenshot** · `docs/screenshots/settings.png`
-> _The Settings dialog._
+<img width="470" height="862" alt="image" src="https://github.com/user-attachments/assets/2712f3e8-89f3-41a8-abf5-6d626a1bca58" />
 
 ---
 
@@ -124,14 +116,15 @@ The **⚙️** button (titlebar, between *Reload* and *Close*) opens settings, p
 
 On screens ≤ 768px the three columns collapse into a single full-screen panel with a **Sources / Prompt / Editor** tab bar; tapping a block in Prompt jumps to Editor. The Prompt Inspector and Settings open as full-screen windows. The desktop layout is untouched.
 
-> 🖼️ **Screenshot** · `docs/screenshots/mobile.png`
-> _The mobile single-column layout with the tab bar._
+<img width="386" height="584" alt="image" src="https://github.com/user-attachments/assets/c3c03ed2-f7a6-478e-87e5-f88a3bc250ef" />
+<img width="386" height="587" alt="image" src="https://github.com/user-attachments/assets/5fc4df6b-7229-4046-ade7-592274f2d492" />
+<img width="386" height="586" alt="image" src="https://github.com/user-attachments/assets/92f7fc07-29da-4ef2-b958-63467e469442" />
 
 ---
 
 ## Compatibility
 
-Built against **Marinara Engine 2.0.0**. Data access is plain REST against the same-origin `/api` server, so it also runs on the legacy Node.js/Fastify build (v1.5.9+). Endpoints used:
+Built against **Marinara Engine 2.0.0+**. Data access is plain REST against the same-origin `/api` server, so it also runs on the legacy Node.js/Fastify build (v1.5.9+). Endpoints used:
 
 - **Presets:** `GET /api/prompts/`, `GET /api/prompts/:id/full`, `PATCH /api/prompts/:id`, sections `POST`/`PATCH`/`DELETE` + `PUT …/sections/reorder`, groups `POST`/`PATCH`/`DELETE`, variables `POST`/`PATCH`/`DELETE`.
 - **Lorebooks:** `GET /api/lorebooks`, `PATCH /api/lorebooks/:id`, entries `GET`/`POST`/`PATCH`/`DELETE`, folders `GET`/`POST`/`PATCH`/`DELETE` (folder `PATCH` carries `parentFolderId` for nesting).
