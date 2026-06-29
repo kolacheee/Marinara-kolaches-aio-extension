@@ -2,6 +2,32 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.9.0] — 2026-06-30
+
+A workflow-quality-of-life release: find things faster, see how full the prompt is, keep your selection between sessions, and nest lorebook folders.
+
+### Added
+
+- **Searchable Sources pickers.** The Preset / Character / Persona / Lorebook dropdowns are now type-to-filter comboboxes — start typing to narrow a long list, then click or press Enter. Works on desktop and mobile (tap the field, the on-screen keyboard filters the list). Arrow keys + Enter to pick, Esc to close.
+- **Lorebook entry search.** A 🔍 button next to the active lorebook's ✏️ opens an inline filter that narrows the entry checklist by name or content as you type.
+- **Simulated Prompt filter bar.** A search box in the Simulated Prompt header filters the assembled blocks by name or content; chat-history blocks also match on their depth-injected items.
+- **Token estimates + context gauge.** Each block shows a rough `~N` token estimate (≈4 characters per token), and the Simulated Prompt header shows the total plus a usage bar that fills toward your **active connection's Max Context Window** (green → amber at 80% → red at 100%). The Prompt Inspector badge shows the captured prompt's estimated total. Token estimates require an active API connection (the gauge needs a real context window to fill toward), and can be turned off in Settings.
+- **Remember last selection.** Your Sources selection — preset, lorebooks (and the active one), character, persona, and each lorebook's checked entries/folders — is saved and restored when you reopen the console. IDs that no longer exist are quietly dropped.
+- **Nested lorebook folders.** Folders can now nest inside other folders. The folder editor has a **Parent folder** dropdown (excludes the folder itself and its own descendants so you can't create a loop) and a **Child folders** multiselect (check to nest a folder here, uncheck to detach). In Sources, child folders are indented beneath their parents. (Disabling a parent folder disables every entry in its subtree at generation time — matching the engine.)
+- **JSON / plaintext view toggle** in the Prompt Inspector — switch between readable `### Role` text and a colour-coded `[{role, content}]` JSON array, keeping the role colour-coding either way.
+- **Simulated Prompt column toggles** in ⚙️ Settings — hide the filter bar, token estimates, group badges, and folder badges individually to reduce clutter (all on by default).
+- **Token gauge note** clarifies that estimates need an active connection.
+
+### Changed
+
+- **Settings is full-screen on mobile**, matching the Prompt Inspector, so the header and close button are always reachable and the body scrolls.
+- **Clearer save/move errors.** Failed saves and folder moves now surface the engine's actual error message (e.g. an invalid folder nesting) instead of a generic "see console" toast.
+
+### Fixed
+
+- **Dropdowns no longer show a duplicate "— Select a … —" row.** The combobox shows the placeholder in the field itself, so the redundant blank list row was removed (the lorebook "— Remove this lorebook —" row is kept).
+- **Settings header/scroll on small screens** — the header is pinned and the body scrolls, so the dialog is always closable on mobile.
+
 ## [1.8.1] — 2026-06-22
 
 ### Fixed
