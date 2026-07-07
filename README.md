@@ -39,6 +39,7 @@ Two utilities live in the titlebar: **🔍 Inspect** (capture the real prompt) a
 
 Type-to-filter comboboxes for **Preset**, **Character(s)**, and **Persona**, plus a **multi-lorebook** section. Start typing to narrow a long list — handy once you have dozens or hundreds of characters or lorebooks — then click or press Enter.
 
+- Each section header has a **+** button that **creates a brand-new empty** preset / lorebook / character / persona and drops you straight into its editor.
 - The **Preset** picker has a ✏️ that opens the **Preset Editor**.
 - Each **lorebook** row has a ✏️ (its **Lorebook Editor**); the **active** lorebook also gets a 🔍 to **filter its entries** by name or content.
 - Add as many lorebooks as you like — each gets its own row, and only the active one expands its checklist (keeps the column compact).
@@ -143,9 +144,9 @@ On screens ≤ 768px the three columns collapse into a single full-screen panel 
 
 Built against **Marinara Engine 2.0.0+**. Data access is plain REST against the same-origin `/api` server, so it also runs on the legacy Node.js/Fastify build (v1.5.9+). Endpoints used:
 
-- **Presets:** `GET /api/prompts/`, `GET /api/prompts/:id/full`, `PATCH /api/prompts/:id`, sections `POST`/`PATCH`/`DELETE` + `PUT …/sections/reorder`, groups `POST`/`PATCH`/`DELETE`, variables `POST`/`PATCH`/`DELETE`.
-- **Lorebooks:** `GET /api/lorebooks`, `PATCH /api/lorebooks/:id`, entries `GET`/`POST`/`PATCH`/`DELETE`, folders `GET`/`POST`/`PATCH`/`DELETE` (folder `PATCH` carries `parentFolderId` for nesting).
-- **Characters & personas:** `GET`/`PATCH` for `/api/characters[/:id]` and `/api/characters/personas/{list,:id}`.
+- **Presets:** `GET /api/prompts/`, `POST /api/prompts/` (create), `GET /api/prompts/:id/full`, `PATCH /api/prompts/:id`, sections `POST`/`PATCH`/`DELETE` + `PUT …/sections/reorder`, groups `POST`/`PATCH`/`DELETE`, variables `POST`/`PATCH`/`DELETE`.
+- **Lorebooks:** `GET /api/lorebooks`, `POST /api/lorebooks` (create), `PATCH /api/lorebooks/:id`, entries `GET`/`POST`/`PATCH`/`DELETE`, folders `GET`/`POST`/`PATCH`/`DELETE` (folder `PATCH` carries `parentFolderId` for nesting).
+- **Characters & personas:** `GET`/`POST`/`PATCH` for `/api/characters[/:id]` and `/api/characters/personas/{list,:id}` (character create posts `{ data }`; persona create posts flat `{ name }`).
 - **Prompt Inspector & token gauge:** `POST /api/generate/dryRun` (`{ chatId, returnPrompt: true }`), `GET /api/chats/:id` + `GET /api/chats/:id/messages`, and `GET /api/connections` (to read the active connection's Max Context Window).
 
 Marinara 2.0.0 returns some booleans (e.g. a prompt section's `enabled`) as the strings `"true"`/`"false"`; the extension normalizes those on load. If a future release reshapes an endpoint, the extension surfaces it as a "Couldn't load …" / "Save failed …" toast — file an issue and I'll patch.

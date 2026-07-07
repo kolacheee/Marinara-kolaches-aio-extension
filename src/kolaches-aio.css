@@ -339,6 +339,23 @@
   margin-bottom: 0.375rem;
 }
 .kaio-source-icon { font-size: 0.8125rem; }
+/* "+" create button at the right edge of a Sources section header. Borderless
+   to match the ✏️/⚙️ header actions (kaio-folder-edit-btn) so they read as one
+   set rather than a heavy filled pill next to bare glyphs. */
+.kaio-source-create-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 0.0625rem 0.1875rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.kaio-source-create-btn:hover { color: var(--primary, #a78bfa); }
 .kaio-source-select-row {
   display: flex;
   align-items: center;

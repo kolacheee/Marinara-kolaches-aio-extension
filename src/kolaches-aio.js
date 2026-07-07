@@ -760,6 +760,7 @@ function renderLeft() {
     items: state.presets,
     valueId: state.selectedPresetId,
     placeholder: "— Select a preset —",
+    onCreate: createPreset,
     onChange: async (id) => {
       if (await guardDirty() === false) return;
       state.selectedPresetId = id;
@@ -803,6 +804,7 @@ function renderLeft() {
   lbHeader.className = "kaio-source-label";
   lbHeader.innerHTML =
     `<span class="kaio-source-icon">📖</span><span>Lorebooks</span>`;
+  lbHeader.appendChild(makeSourceCreateBtn("Create a new lorebook", createLorebook));
   lbSection.appendChild(lbHeader);
 
   const slots = state.selectedLorebookIds.length + 1; // trailing empty
@@ -947,6 +949,7 @@ function renderLeft() {
     items: state.personas,
     valueId: state.selectedPersonaId,
     placeholder: "— Select a persona —",
+    onCreate: createPersona,
     onChange: async (id) => {
       if (await guardDirty() === false) return;
       state.selectedPersonaId = id;
@@ -976,6 +979,7 @@ function renderCharacterSources() {
   header.className = "kaio-source-label";
   header.innerHTML =
     `<span class="kaio-source-icon">🧍</span><span>${isGroup ? "Characters (Group)" : "Character"}</span>`;
+  header.appendChild(makeSourceCreateBtn("Create a new character", createCharacter));
   if (isGroup) {
     const gearBtn = document.createElement("button");
     gearBtn.type = "button";
@@ -1127,13 +1131,135 @@ function renderCharacterSources() {
   return wrap;
 }
 
-function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange, inline }) {
+// The small "+" button that sits at the right edge of a Sources section header
+// and creates a brand-new empty entity of that kind.
+function makeSourceCreateBtn(title, handler) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "kaio-source-create-btn";
+  btn.textContent = "+";
+  btn.title = title;
+  btn.setAttribute("aria-label", title); // "+" content would otherwise be the a11y name
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); handler(); });
+  return btn;
+}
+
+// ── Create brand-new empty sources ─────────────────────────────
+// Each POSTs the minimal body Marinara's create schema requires, refreshes the
+// source lists, selects the new item, and opens its editor so the user can fill
+// it in from scratch. Mirrors the createEntry/createFolder pattern.
+async function createPreset() {
+  if (await guardDirty() === false) return;
+  try {
+    const created = await api("POST", "/prompts/", { name: "New Preset" });
+    await loadAllSources();
+    if (created && created.id) {
+      state.selectedPresetId = created.id;
+      state.variablePreviews = {};
+      state.expandedBlocks.clear();
+      await loadPresetFull(created.id);
+      inspectBlock({ kind: "preset-editor", id: "preset-editor" });
+    }
+    renderAll();
+    showToast("Preset created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create preset failed", err);
+    showToast(serverErrorText(err, "Failed to create preset"), "error");
+  }
+}
+
+async function createLorebook() {
+  if (await guardDirty() === false) return;
+  try {
+    // Send only `name` — the create schema's scope superRefine rejects
+    // conflicting id/global fields, and everything else has a server default.
+    const created = await api("POST", "/lorebooks", { name: "New Lorebook" });
+    await loadAllSources();
+    if (created && created.id) {
+      if (!state.selectedLorebookIds.includes(created.id)) {
+        state.selectedLorebookIds = [...state.selectedLorebookIds, created.id];
+      }
+      state.activeLorebookId = created.id;
+      state.entryFilter = "";       // don't carry the previous lorebook's search
+      state.entryFilterOpen = false;
+      if (!state.selectedEntryIdsByLorebook[created.id]) {
+        state.selectedEntryIdsByLorebook[created.id] = new Set();
+      }
+      await loadLorebookEntries(created.id);
+      await loadLorebookFolders(created.id);
+      const fresh = state.lorebooks.find((l) => l.id === created.id) || created;
+      inspectBlock({ kind: "lorebook-editor", id: "lorebook-editor-" + created.id, lorebook: fresh });
+    }
+    renderAll();
+    showToast("Lorebook created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create lorebook failed", err);
+    showToast(serverErrorText(err, "Failed to create lorebook"), "error");
+  }
+}
+
+async function createCharacter() {
+  if (await guardDirty() === false) return;
+  try {
+    // POST wants the V2 card fields under `data` AS AN OBJECT (reads return it
+    // as a JSON string, which normalizeCharacter parses).
+    const created = await api("POST", "/characters", { data: { name: "New Character" } });
+    await loadAllSources();
+    if (created && created.id) {
+      // Make the new character visible. With a chat open the picker shows only
+      // the primary, so promote it there (matching the single-picker's onChange);
+      // with no chat, append it as the next group member (the add-row flow).
+      if (!groupPreviewEnabled()) {
+        state.selectedCharacterIds = [created.id, ...state.selectedCharacterIds.filter((x) => x !== created.id)];
+      } else if (!state.selectedCharacterIds.includes(created.id)) {
+        state.selectedCharacterIds = [...state.selectedCharacterIds, created.id];
+      }
+      await loadCharacter(created.id);
+      const fresh = state.charactersFull[created.id] || normalizeCharacter(created);
+      // Prefer the real rendered block (keeps the editor open after Save); fall
+      // back to a standalone editor when no character block is on screen.
+      const blk = buildSimulatedPrompt().find((b) => b.kind === "character" && b.character && b.character.id === created.id);
+      if (blk) inspectBlock(blk);
+      else if (fresh) inspectBlock({ kind: "character", id: "character-editor-" + created.id, character: fresh });
+    }
+    renderAll();
+    showToast("Character created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create character failed", err);
+    showToast(serverErrorText(err, "Failed to create character"), "error");
+  }
+}
+
+async function createPersona() {
+  if (await guardDirty() === false) return;
+  try {
+    // Persona fields are flat/top-level — no `data` wrapper.
+    const created = await api("POST", "/characters/personas", { name: "New Persona" });
+    await loadAllSources();
+    if (created && created.id) {
+      state.selectedPersonaId = created.id;
+      await loadPersona(created.id);
+      const fresh = state.personaFull || created;
+      const blk = buildSimulatedPrompt().find((b) => b.kind === "persona" && b.persona && b.persona.id === created.id);
+      if (blk) inspectBlock(blk);
+      else if (fresh) inspectBlock({ kind: "persona", id: "persona-editor-" + created.id, persona: fresh });
+    }
+    renderAll();
+    showToast("Persona created", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Create persona failed", err);
+    showToast(serverErrorText(err, "Failed to create persona"), "error");
+  }
+}
+
+function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange, inline, onCreate }) {
   const wrap = document.createElement("div");
   if (!inline) wrap.className = "kaio-source";
 
   const lab = document.createElement("div");
   lab.className = "kaio-source-label";
   lab.innerHTML = `<span class="kaio-source-icon">${icon}</span><span>${label}</span>`;
+  if (onCreate) lab.appendChild(makeSourceCreateBtn("Create a new " + label.toLowerCase(), onCreate));
   wrap.appendChild(lab);
 
   wrap.appendChild(renderSearchableSelect({
@@ -4035,11 +4161,29 @@ async function saveDraft() {
         const newData = { ...(fresh.data || {}), ...d.fields };
         await api("PATCH", "/characters/" + d.sourceId, { data: newData });
         await loadCharacter(d.sourceId);
+        // A standalone "+ Character" editor has an id the save-tail can't
+        // re-match (no rendered block), so re-inspect it here to keep it open.
+        if (state.inspecting && String(state.inspecting.id).startsWith("character-editor-") && state.charactersFull[d.sourceId]) {
+          state.inspecting = { kind: "character", id: "character-editor-" + d.sourceId, character: state.charactersFull[d.sourceId] };
+          state.draft = makeDraft(state.inspecting);
+          state.isDirty = false;
+          renderAll();
+          showToast("Saved ✓", "success");
+          return;
+        }
         break;
       }
       case "persona": {
         await api("PATCH", "/characters/personas/" + d.sourceId, d.fields);
         await loadPersona(d.sourceId);
+        if (state.inspecting && String(state.inspecting.id).startsWith("persona-editor-") && state.personaFull) {
+          state.inspecting = { kind: "persona", id: "persona-editor-" + d.sourceId, persona: state.personaFull };
+          state.draft = makeDraft(state.inspecting);
+          state.isDirty = false;
+          renderAll();
+          showToast("Saved ✓", "success");
+          return;
+        }
         break;
       }
       case "group-editor": {
