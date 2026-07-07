@@ -2,6 +2,21 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.10.0] — 2026-07-07
+
+Group chat support: build a multi-character group and see how its character section assembles.
+
+### Added
+
+- **Multi-character group picker.** When no chat is open, the **Character** source becomes a group picker — add a row per character (mirroring the multi-lorebook rows), with the first row marked **Primary** (index 0 = first responder) and ▲ to reorder. A group chat in Marinara is simply a chat with 2+ characters, so this is the console's way to compose one and preview it.
+- **Group Chat settings panel.** A **⚙️** on the *Characters (Group)* source (and clicking the group banner in the Simulated Prompt) opens a settings panel mirroring Marinara's *Chat Settings → Group Chat*: **Mode** (Merged/Narrator vs Individual), **Response order** (Sequential / Smart / Manual), **Add Turn To Prompt**, **Name Prefix History**, **Color Dialogues** (merged), **Scenario Override**, and **Inactive members** (bench a participant). Settings are console-local and remembered between sessions.
+- **Group-aware Simulated Prompt.** The `character` marker now stacks one card block per active member behind a **Group** banner. **Merged** stacks all cards; **Individual** stacks all with an optional **Preview turn** focus to view a single responder (others hidden). A **Scenario Override** drops each card's own scenario and renders one shared **Scenario** block after the cards — matching how the engine assembles it. Benched (inactive) members are excluded. The banner explains the runtime-only bits (per-turn card, `Respond ONLY as…`, history relabeling, Smart/Manual choice) as notes rather than fabricating them.
+- **Structural-only, off-chat.** Like the chat-history preview, the group surface is design-time: when a Marinara chat is **open**, the console defers to the live **🔍 Inspect** capture (which reflects the chat's real composition and settings) and shows a single primary-character picker with a note.
+
+### Changed
+
+- **Selection persistence** now stores the full character group (`characterIds`), the group settings, and the focused responder. Older saved selections with a single `characterId` still restore (as a one-member group).
+
 ## [1.9.0] — 2026-06-30
 
 A workflow-quality-of-life release: find things faster, see how full the prompt is, keep your selection between sessions, and nest lorebook folders.

@@ -102,15 +102,35 @@ const state = {
   selectedLorebookIds: [],
   activeLorebookId: null,
   selectedEntryIdsByLorebook: {}, // {lorebookId → Set<entryId>}
-  selectedCharacterId: null,
+  // Group chat: an ordered list of participant character IDs (index 0 = the
+  // primary character / first sequential responder). One entry behaves exactly
+  // like the old single-character selection.
+  selectedCharacterIds: [],
   selectedPersonaId: null,
 
   presetFull: null,              // {preset, sections, groups, choiceBlocks}
   lorebookEntries: {},           // lorebookId → entries[]
   lorebookFolders: {},           // lorebookId → folders[]
   selectedFolderIdsByLorebook: {}, // {lorebookId → Set<folderId>}
-  characterFull: null,           // full character (with .data)
+  charactersFull: {},            // {characterId → full character (with .data)}
   personaFull: null,
+
+  // Console-level group-chat settings, mirroring Marinara's Chat Settings →
+  // Group Chat panel (see ChatMetadata: groupChatMode, groupResponseOrder,
+  // groupTurnPromptEnabled, groupSpeakerNamesInHistory, groupSpeakerColors,
+  // groupScenarioText). Only meaningful when a group (2+ characters) is picked
+  // and no live chat is open — a group chat's real settings live on the chat.
+  groupSettings: {
+    mode: "merged",               // "merged" (narrator) | "individual"
+    responseOrder: "sequential",  // "sequential" | "smart" | "manual"
+    turnPromptEnabled: true,      // append "Respond ONLY as <name>." per turn
+    speakerNamesInHistory: false, // prefix history turns with the speaker name
+    speakerColors: false,         // merged: wrap dialogue in <speaker> tags
+    scenarioText: "",             // non-empty = shared scenario override
+    inactiveCharacterIds: [],     // members temporarily benched from the prompt
+  },
+  // Individual-mode preview: focus a single responder (null = stack all cards).
+  groupFocusCharId: null,
 
   inspecting: null,              // {kind, id} – current right-panel target
   draft: null,                   // local edits before save
@@ -375,7 +395,7 @@ function buildConsole() {
       await loadLorebookEntries(lbId);
       await loadLorebookFolders(lbId);
     }
-    if (state.selectedCharacterId) await loadCharacter(state.selectedCharacterId);
+    for (const cid of state.selectedCharacterIds) await loadCharacter(cid);
     if (state.selectedPersonaId) await loadPersona(state.selectedPersonaId);
     await loadActiveConnectionContext();
     state.validationErrors = {};
@@ -575,12 +595,62 @@ async function loadCharacter(id) {
   const c = await api("GET", "/characters/" + id).catch((e) => {
     console.error(e); showToast("Couldn't load character", "error"); return null;
   });
-  state.characterFull = normalizeCharacter(c);
+  const norm = normalizeCharacter(c);
+  if (norm) state.charactersFull[id] = norm;
+  else delete state.charactersFull[id];
 }
 async function loadPersona(id) {
   state.personaFull = await api("GET", "/characters/personas/" + id).catch((e) => {
     console.error(e); showToast("Couldn't load persona", "error"); return null;
   });
+}
+
+// ── Group-chat helpers ─────────────────────────────────────────
+// The selected characters, in order (index 0 = primary). Skips any that
+// failed to load.
+function selectedCharacters() {
+  return (state.selectedCharacterIds || [])
+    .map((id) => state.charactersFull[id])
+    .filter(Boolean);
+}
+// The group's multi-character preview + settings are a design-time surface for
+// when NO Marinara chat is open. When a chat IS open (a group chat is just a
+// chat with 2+ characters), its real composition and settings drive generation
+// and the live 🔍 Inspect capture reflects them — so we defer to that instead
+// of a structural guess, exactly like chat history is structural-only off-chat.
+function groupPreviewEnabled() {
+  return !getActiveChatId();
+}
+// True when the console should assemble a multi-character group (2+ picked and
+// no live chat to defer to).
+function isGroupSelection() {
+  return groupPreviewEnabled() && (state.selectedCharacterIds || []).length > 1;
+}
+// Group members that actually contribute to the prompt (benched members drop
+// out, mirroring the engine's inactiveCharacterIds filtering).
+function activeGroupCharacters() {
+  const inactive = new Set(state.groupSettings.inactiveCharacterIds || []);
+  return selectedCharacters().filter((c) => !inactive.has(c.id));
+}
+// A non-empty Scenario Override replaces every card's own scenario.
+function groupScenarioActive() {
+  return isGroupSelection() && (state.groupSettings.scenarioText || "").trim().length > 0;
+}
+function openGroupEditor() {
+  inspectBlock({ kind: "group-editor", id: "group-editor" });
+}
+// Human-readable label for a group mode — single source of truth so the picker
+// summary, the banner, and the settings pill can't drift apart.
+function groupModeLabel(mode) {
+  return mode === "merged" ? "Merged (Narrator)" : "Individual";
+}
+// Drop all per-member state for a character removed/swapped out of the group.
+function pruneGroupMember(id) {
+  if (!id) return;
+  delete state.charactersFull[id];
+  state.groupSettings.inactiveCharacterIds =
+    (state.groupSettings.inactiveCharacterIds || []).filter((x) => x !== id);
+  if (state.groupFocusCharId === id) state.groupFocusCharId = null;
 }
 
 // ── Remember last selection (persisted across opens) ───────────
@@ -599,7 +669,9 @@ function persistSelection() {
       presetId: state.selectedPresetId,
       lorebookIds: state.selectedLorebookIds,
       activeLorebookId: state.activeLorebookId,
-      characterId: state.selectedCharacterId,
+      characterIds: state.selectedCharacterIds,
+      groupSettings: state.groupSettings,
+      groupFocusCharId: state.groupFocusCharId,
       personaId: state.selectedPersonaId,
       entries,
       folders,
@@ -637,9 +709,31 @@ async function restoreSelection() {
     state.selectedFolderIdsByLorebook[lbId] = new Set(savedFolders.filter((fid) => folders.some((f) => f.id === fid)));
   }
 
-  if (saved.characterId && state.characters.some((c) => c.id === saved.characterId)) {
-    state.selectedCharacterId = saved.characterId;
-    await loadCharacter(saved.characterId);
+  // Group characters — accept the new `characterIds` array, and fall back to a
+  // pre-group `characterId` scalar so older saved selections still restore.
+  const savedCharIds = Array.isArray(saved.characterIds)
+    ? saved.characterIds
+    : (saved.characterId ? [saved.characterId] : []);
+  const validCharIds = savedCharIds.filter((id) => state.characters.some((c) => c.id === id));
+  state.selectedCharacterIds = validCharIds;
+  for (const cid of validCharIds) await loadCharacter(cid);
+  if (saved.groupSettings && typeof saved.groupSettings === "object") {
+    state.groupSettings = {
+      ...state.groupSettings,
+      ...saved.groupSettings,
+      // Only keep benched IDs that are still members.
+      inactiveCharacterIds: Array.isArray(saved.groupSettings.inactiveCharacterIds)
+        ? saved.groupSettings.inactiveCharacterIds.filter((id) => validCharIds.includes(id))
+        : [],
+    };
+  }
+  // Restore the focused responder only if it's still a valid, active member of
+  // an individual-mode group (matching the invariant saveDraft enforces).
+  if (saved.groupFocusCharId &&
+      validCharIds.includes(saved.groupFocusCharId) &&
+      state.groupSettings.mode === "individual" &&
+      !(state.groupSettings.inactiveCharacterIds || []).includes(saved.groupFocusCharId)) {
+    state.groupFocusCharId = saved.groupFocusCharId;
   }
   if (saved.personaId && state.personas.some((p) => p.id === saved.personaId)) {
     state.selectedPersonaId = saved.personaId;
@@ -845,26 +939,7 @@ function renderLeft() {
   }
   leftBodyEl.appendChild(lbSection);
 
-  leftBodyEl.appendChild(renderSourcePicker({
-    label: "Character",
-    icon: "🧍",
-    items: state.characters.map((c) => ({
-      id: c.id,
-      name: (c.data && c.data.name) || c.name || "Untitled character",
-    })),
-    valueId: state.selectedCharacterId,
-    placeholder: "— Select a character —",
-    onChange: async (id) => {
-      if (await guardDirty() === false) return;
-      state.selectedCharacterId = id;
-      state.characterFull = null;
-      state.inspecting = null;
-      state.draft = null;
-      state.isDirty = false;
-      if (id) await loadCharacter(id);
-      renderAll();
-    },
-  }));
+  leftBodyEl.appendChild(renderCharacterSources());
 
   leftBodyEl.appendChild(renderSourcePicker({
     label: "Persona",
@@ -883,6 +958,173 @@ function renderLeft() {
       renderAll();
     },
   }));
+}
+
+// Character source(s). With no live chat open this is a multi-character group
+// picker (mirroring the multi-lorebook rows) plus a Group Chat settings hook;
+// when a chat IS open we collapse to a single primary picker and defer group
+// composition/settings to the live 🔍 Inspect capture.
+function renderCharacterSources() {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-source";
+
+  const ids = state.selectedCharacterIds || [];
+  const groupOn = groupPreviewEnabled();
+  const isGroup = groupOn && ids.length > 1;
+
+  const header = document.createElement("div");
+  header.className = "kaio-source-label";
+  header.innerHTML =
+    `<span class="kaio-source-icon">🧍</span><span>${isGroup ? "Characters (Group)" : "Character"}</span>`;
+  if (isGroup) {
+    const gearBtn = document.createElement("button");
+    gearBtn.type = "button";
+    gearBtn.className = "kaio-folder-edit-btn";
+    gearBtn.innerHTML = "⚙️";
+    gearBtn.title = "Group chat settings";
+    gearBtn.addEventListener("click", (ev) => { ev.stopPropagation(); openGroupEditor(); });
+    header.appendChild(gearBtn);
+  }
+  wrap.appendChild(header);
+
+  const charItems = () => state.characters.map((c) => ({
+    id: c.id,
+    name: (c.data && c.data.name) || c.name || "Untitled character",
+  }));
+  const clearInspect = () => { state.inspecting = null; state.draft = null; state.isDirty = false; };
+
+  if (!groupOn) {
+    // A chat is open — keep a single-character picker bound to the primary and
+    // leave any extra (hidden) members untouched so closing the chat restores
+    // the full group.
+    const primary = ids[0] || null;
+    const combo = renderSearchableSelect({
+      items: charItems(),
+      valueId: primary,
+      placeholder: "— Select a character —",
+      ariaLabel: "Character",
+      onChange: async (id) => {
+        if (await guardDirty() === false) return;
+        if (id) {
+          // Promote the chosen character to primary; keep every other (hidden)
+          // member so closing the chat restores the full group intact.
+          state.selectedCharacterIds = [id, ...ids.filter((x) => x !== id)];
+          if (!state.charactersFull[id]) await loadCharacter(id);
+        } else {
+          state.selectedCharacterIds = ids.filter((x) => x !== primary);
+        }
+        clearInspect();
+        renderAll();
+      },
+    });
+    wrap.appendChild(combo);
+    const note = document.createElement("div");
+    note.className = "kaio-group-note";
+    note.innerHTML =
+      "A chat is active — group composition &amp; settings come from the live chat. " +
+      "Use <strong>🔍 Inspect</strong> for the exact prompt.";
+    wrap.appendChild(note);
+    return wrap;
+  }
+
+  // No chat open: one row per member + a trailing "add" row (like lorebooks).
+  const slots = ids.length + 1;
+  for (let i = 0; i < slots; i++) {
+    const isLast = i === ids.length;
+    const currentId = isLast ? null : ids[i];
+
+    const row = document.createElement("div");
+    row.className = "kaio-lb-row kaio-char-row";
+    const rowHead = document.createElement("div");
+    rowHead.className = "kaio-lb-rowhead";
+
+    // Pool for this row: everything not already picked in another row.
+    const taken = new Set(ids);
+    if (currentId) taken.delete(currentId);
+    const items = charItems().filter((c) => !taken.has(c.id));
+
+    const combo = renderSearchableSelect({
+      items,
+      valueId: currentId,
+      placeholder: isLast
+        ? (ids.length ? "— Add another character —" : "— Select a character —")
+        : "Character",
+      blankLabel: isLast ? undefined : "— Remove this character —",
+      ariaLabel: "Character",
+      onChange: async (newId) => {
+        // Re-picking the character already in this row is a no-op — bail before
+        // pruneGroupMember would delete the still-selected card's data.
+        if (newId === currentId) return;
+        if (await guardDirty() === false) return;
+        if (isLast) {
+          if (!newId) return;
+          state.selectedCharacterIds = [...ids, newId];
+          if (!state.charactersFull[newId]) await loadCharacter(newId);
+        } else if (!newId) {
+          state.selectedCharacterIds = ids.filter((id) => id !== currentId);
+          pruneGroupMember(currentId);
+        } else {
+          const next = [...ids];
+          next[i] = newId;
+          state.selectedCharacterIds = next;
+          if (!state.charactersFull[newId]) await loadCharacter(newId);
+          pruneGroupMember(currentId);
+        }
+        clearInspect();
+        renderAll();
+      },
+    });
+    rowHead.appendChild(combo);
+
+    if (currentId) {
+      if (i === 0) {
+        const badge = document.createElement("span");
+        badge.className = "kaio-group-badge kaio-primary-badge";
+        badge.textContent = "Primary";
+        badge.title = "Primary character (first in the group order)";
+        rowHead.appendChild(badge);
+      }
+      if (i > 0) {
+        const upBtn = document.createElement("button");
+        upBtn.type = "button";
+        upBtn.className = "kaio-folder-edit-btn";
+        upBtn.innerHTML = "▲";
+        upBtn.title = "Move earlier in the group order";
+        upBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          if (await guardDirty() === false) return;
+          const next = [...ids];
+          [next[i - 1], next[i]] = [next[i], next[i - 1]];
+          state.selectedCharacterIds = next;
+          renderAll();
+        });
+        rowHead.appendChild(upBtn);
+      }
+    }
+    row.appendChild(rowHead);
+    wrap.appendChild(row);
+  }
+
+  // Compact settings summary (only meaningful with 2+ members).
+  if (ids.length > 1) {
+    const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+    const gs = state.groupSettings;
+    const bits = [groupModeLabel(gs.mode)];
+    if (gs.mode === "individual") bits.push(cap(gs.responseOrder));
+    if ((gs.scenarioText || "").trim()) bits.push("Scenario override");
+    const summary = document.createElement("div");
+    summary.className = "kaio-group-note kaio-group-summary";
+    summary.innerHTML = `<span>${escapeHTML(bits.join(" · "))}</span>`;
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "kaio-group-settings-link";
+    link.textContent = "Group settings ⚙️";
+    link.addEventListener("click", () => openGroupEditor());
+    summary.appendChild(link);
+    wrap.appendChild(summary);
+  }
+
+  return wrap;
 }
 
 function renderSourcePicker({ label, icon, items, valueId, placeholder, onChange, inline }) {
@@ -1429,7 +1671,6 @@ function buildSimulatedPrompt() {
   const depthEntries  = picked.filter((e) => e.position === 2)
     .sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0) || (a.order ?? 0) - (b.order ?? 0));
 
-  const character = state.characterFull || null;
   const persona   = state.personaFull   || null;
 
   // Sections with depth-injection are separated out — they would
@@ -1462,8 +1703,42 @@ function buildSimulatedPrompt() {
           }
           break;
         case "character":
-          if (character) blocks.push(makeCharacterBlock(section, character, cfg));
-          else blocks.push(makeMarkerBlock(section, "character"));
+          if (isGroupSelection()) {
+            // Group: an info banner (mode + runtime caveats + focus selector),
+            // then one card block per active member — stacked exactly like N
+            // lorebook entries stack at a world_info anchor.
+            const chars = activeGroupCharacters();
+            const overrideActive = groupScenarioActive();
+            blocks.push({
+              kind: "group-info",
+              id: "group-info-" + section.id,
+              section,
+              characters: chars,
+            });
+            // Individual mode can focus a single responder (the per-turn view).
+            let toRender = chars;
+            if (state.groupSettings.mode === "individual" && state.groupFocusCharId) {
+              const focused = chars.filter((c) => c.id === state.groupFocusCharId);
+              if (focused.length) toRender = focused;
+            }
+            for (const c of toRender) {
+              blocks.push(makeCharacterBlock(section, c, cfg, { group: true, omitScenario: overrideActive }));
+            }
+            if (!toRender.length) blocks.push(makeMarkerBlock(section, "character"));
+            // A shared scenario override renders once, after the cards.
+            if (overrideActive) {
+              blocks.push({
+                kind: "group-scenario",
+                id: "group-scenario-" + section.id,
+                section,
+                text: state.groupSettings.scenarioText,
+              });
+            }
+          } else {
+            const one = selectedCharacters()[0] || null;
+            if (one) blocks.push(makeCharacterBlock(section, one, cfg));
+            else blocks.push(makeMarkerBlock(section, "character"));
+          }
           break;
         case "persona":
           if (persona) blocks.push(makePersonaBlock(section, persona));
@@ -1500,13 +1775,22 @@ function makeEntryBlock(section, entry) {
     entry,
   };
 }
-function makeCharacterBlock(section, character, cfg) {
+function makeCharacterBlock(section, character, cfg, opts) {
+  opts = opts || {};
+  let fields = (cfg && cfg.characterFields) || null;
+  // Under a group Scenario Override each card's own scenario is dropped (the
+  // shared one is appended separately), so strip it from the previewed fields.
+  if (opts.omitScenario) {
+    const base = fields || ["description", "personality", "scenario", "system_prompt"];
+    fields = base.filter((f) => f !== "scenario");
+  }
   return {
     kind: "character",
     id: "character-" + character.id + "-" + section.id,
     section,
     character,
-    fields: (cfg && cfg.characterFields) || null,
+    fields,
+    group: !!opts.group,
   };
 }
 function makePersonaBlock(section, persona) {
@@ -1569,7 +1853,6 @@ function buildValidationItems() {
   const depthEntries  = allEntries.filter((e) => e.position === 2)
     .sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0) || (a.order ?? 0) - (b.order ?? 0));
 
-  const character = state.characterFull || null;
   const persona   = state.personaFull   || null;
 
   const depthSections = (state.presetFull.sections || []).filter(
@@ -1592,17 +1875,18 @@ function buildValidationItems() {
       entryId: e.id,
     });
   };
-  const pushCharacter = (sectionId) => {
-    if (!character) return;
-    const d = character.data || {};
-    const fields = [
+  const pushCharacter = (sectionId, ch, omitScenario) => {
+    if (!ch) return;
+    const d = ch.data || {};
+    let fields = [
       "description", "personality", "scenario",
       "system_prompt", "post_history_instructions",
     ];
+    if (omitScenario) fields = fields.filter((f) => f !== "scenario");
     const text = fields.map((f) => d[f] || "").filter(Boolean).join("\n\n");
     items.push({
-      blockId: "character-" + character.id + "-" + sectionId,
-      label: d.name || character.name || "Character",
+      blockId: "character-" + ch.id + "-" + sectionId,
+      label: d.name || ch.name || "Character",
       content: text,
     });
   };
@@ -1635,7 +1919,19 @@ function buildValidationItems() {
           for (const e of [...beforeEntries, ...afterEntries]) pushEntry(e);
           break;
         case "character":
-          pushCharacter(section.id);
+          if (isGroupSelection()) {
+            const omit = groupScenarioActive();
+            for (const ch of activeGroupCharacters()) pushCharacter(section.id, ch, omit);
+            if (omit) {
+              items.push({
+                blockId: "group-scenario-" + section.id,
+                label: "Shared scenario",
+                content: state.groupSettings.scenarioText || "",
+              });
+            }
+          } else {
+            pushCharacter(section.id, selectedCharacters()[0] || null, false);
+          }
           break;
         case "persona":
           pushPersona(section.id);
@@ -1967,6 +2263,7 @@ function computeEntryOverlaps(blocks) {
 }
 
 function renderBlock(block, overlaps) {
+  if (block.kind === "group-info") return renderGroupInfoBlock(block);
   const el = document.createElement("div");
   el.className = "kaio-block";
   const isReadonly = block.kind === "marker" || block.kind === "chat-history";
@@ -2051,7 +2348,12 @@ function renderBlock(block, overlaps) {
     el.appendChild(renderValidationErrors(validateErrs));
   }
 
-  if (!isReadonly) el.addEventListener("click", () => inspectBlock(block));
+  if (!isReadonly) {
+    // A group Scenario Override isn't a standalone source — clicking it opens
+    // the Group Chat settings where its text is edited.
+    if (block.kind === "group-scenario") el.addEventListener("click", () => openGroupEditor());
+    else el.addEventListener("click", () => inspectBlock(block));
+  }
 
   // Drag-and-drop for section and marker blocks in the simulated prompt
   const isDraggableKind = block.kind === "section" || block.kind === "marker" || block.kind === "chat-history";
@@ -2261,6 +2563,103 @@ function makeExpandToggle(blockId, expanded) {
   return btn;
 }
 
+// The group banner: a compact, read-only block that sits just above the group's
+// character cards. Shows the mode, a plain-language note about what happens at
+// runtime for the current settings, and (individual mode) a live focus selector
+// to preview a single responder's turn. Clicking it opens the Group Chat editor.
+function renderGroupInfoBlock(block) {
+  const gs = state.groupSettings;
+  const chars = block.characters || [];
+  const merged = gs.mode === "merged";
+  const modeLabel = groupModeLabel(gs.mode);
+
+  const el = document.createElement("div");
+  el.className = "kaio-block kaio-group-info";
+  el.dataset.readonly = "true";
+  el.dataset.compact = "true";
+  el.dataset.selected =
+    state.inspecting && state.inspecting.id === "group-editor" ? "true" : "false";
+
+  const head = document.createElement("div");
+  head.className = "kaio-block-head";
+  head.innerHTML =
+    `<span class="kaio-block-tag" data-kind="group-info">Group</span>` +
+    `<span class="kaio-block-name">${chars.length} character${chars.length === 1 ? "" : "s"}</span>` +
+    `<span class="kaio-group-badge" data-mode="${gs.mode}">${escapeHTML(modeLabel)}</span>`;
+  el.appendChild(head);
+
+  const note = document.createElement("div");
+  note.className = "kaio-group-note";
+  note.textContent = groupInfoNote(gs, chars);
+  el.appendChild(note);
+
+  if (!merged) {
+    const row = document.createElement("div");
+    row.className = "kaio-group-focus";
+    const lab = document.createElement("span");
+    lab.textContent = "Preview turn:";
+    row.appendChild(lab);
+    const sel = document.createElement("select");
+    sel.className = "kaio-select";
+    const all = document.createElement("option");
+    all.value = ""; all.textContent = "All members (stack)";
+    sel.appendChild(all);
+    for (const c of chars) {
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = (c.data && c.data.name) || c.name || "Character";
+      if (state.groupFocusCharId === c.id) o.selected = true;
+      sel.appendChild(o);
+    }
+    // The selector is a view control, not editing — don't bubble to the block.
+    sel.addEventListener("click", (ev) => ev.stopPropagation());
+    sel.addEventListener("change", () => {
+      state.groupFocusCharId = sel.value || null;
+      renderMiddle();
+      persistSelection(); // view-only, but a bare renderMiddle() skips the close-time save
+    });
+    row.appendChild(sel);
+    el.appendChild(row);
+  }
+
+  el.addEventListener("click", () => openGroupEditor());
+  return el;
+}
+// Plain-language summary of how the current group settings assemble at runtime.
+function groupInfoNote(gs, chars) {
+  const n = chars.length;
+  const override = (gs.scenarioText || "").trim().length > 0;
+  // Every member benched — no cards contribute, so the mode blurb would lie.
+  if (!n) {
+    return `All group members are marked Inactive — no character cards are included.`
+      + (override ? ` A shared Scenario Override is still applied.` : "");
+  }
+  const parts = [];
+  if (gs.mode === "merged") {
+    parts.push(`Merged (Narrator): all ${n} card${n === 1 ? "" : "s"} are stacked into one character section and a single reply voices the whole scene.`);
+    if (gs.speakerColors) parts.push(`Dialogue is wrapped in <speaker="name"> tags.`);
+  } else {
+    parts.push(`Individual: at generation the engine builds one card per turn — other members' cards are stripped and history is relabeled so the model answers as a single character.`);
+    const ord = gs.responseOrder === "smart"
+      ? "Smart — an agent picks who speaks each turn"
+      : gs.responseOrder === "manual"
+        ? "Manual — you choose each speaker"
+        : "Sequential — members reply in listed order";
+    parts.push(`Response order: ${ord}.`);
+    parts.push(gs.turnPromptEnabled
+      ? `Each turn appends "Respond ONLY as <name>."`
+      : `No per-turn "Respond ONLY as …" instruction is added.`);
+    if (gs.speakerNamesInHistory) parts.push(`History turns are prefixed with the speaker's name.`);
+    // Only claim a focused view when the focused member is actually in the set.
+    const focused = state.groupFocusCharId && chars.some((c) => c.id === state.groupFocusCharId);
+    parts.push(focused
+      ? `Previewing one member's turn — others are hidden.`
+      : `Showing all members stacked; use "Preview turn" to focus a single responder.`);
+  }
+  if (override) parts.push(`A shared Scenario Override replaces each card's own scenario.`);
+  return parts.join(" ");
+}
+
 function blockTagText(block) {
   switch (block.kind) {
     case "section":        return "Section";
@@ -2269,6 +2668,8 @@ function blockTagText(block) {
     case "persona":        return "Persona";
     case "chat-history":   return "Chat history";
     case "marker":         return "Marker";
+    case "group-info":     return "Group";
+    case "group-scenario": return "Scenario";
     default: return block.kind;
   }
 }
@@ -2279,6 +2680,8 @@ function blockTitle(block) {
   if (block.kind === "persona")        return block.persona.name || "Persona";
   if (block.kind === "chat-history")   return block.section.name || "Chat history";
   if (block.kind === "marker")         return block.section.name || `[${block.markerType}]`;
+  if (block.kind === "group-info")     return "Group";
+  if (block.kind === "group-scenario") return "Shared scenario";
   return "Block";
 }
 function blockPreviewRaw(block) {
@@ -2293,6 +2696,7 @@ function blockPreviewRaw(block) {
     const p = block.persona || {};
     return [p.description, p.personality, p.scenario].filter(Boolean).join("\n\n");
   }
+  if (block.kind === "group-scenario") return block.text || "";
   return "";
 }
 
@@ -2511,6 +2915,20 @@ function makeDraft(block) {
           },
         };
       }
+    case "group-editor":
+      return {
+        kind: "group-editor",
+        sourceId: "group-editor",
+        fields: {
+          mode: state.groupSettings.mode || "merged",
+          responseOrder: state.groupSettings.responseOrder || "sequential",
+          turnPromptEnabled: state.groupSettings.turnPromptEnabled !== false,
+          speakerNamesInHistory: !!state.groupSettings.speakerNamesInHistory,
+          speakerColors: !!state.groupSettings.speakerColors,
+          scenarioText: state.groupSettings.scenarioText || "",
+          inactiveCharacterIds: new Set(state.groupSettings.inactiveCharacterIds || []),
+        },
+      };
     case "folder":
       return {
         kind: "folder",
@@ -2781,6 +3199,10 @@ function renderRight() {
 
     case "lorebook-editor":
       rightBodyEl.appendChild(renderLorebookEditorPanel());
+      break;
+
+    case "group-editor":
+      rightBodyEl.appendChild(renderGroupEditorPanel());
       break;
 
     case "folder": {
@@ -3512,6 +3934,7 @@ function onFieldChange(key, value) {
   // rendered, so re-render the whole inspector when it changes. Other fields
   // can patch the footer in place to preserve focus / caret.
   if ((state.draft.kind === "section" && key === "injectionPosition") ||
+      (state.draft.kind === "group-editor" && (key === "mode" || key === "responseOrder")) ||
       key === "matchingMode" || key === "wrapFormat" || key === "category") {
     renderRight();
     return;
@@ -3618,6 +4041,35 @@ async function saveDraft() {
         await api("PATCH", "/characters/personas/" + d.sourceId, d.fields);
         await loadPersona(d.sourceId);
         break;
+      }
+      case "group-editor": {
+        // Group settings are console-local (a group chat's real settings live on
+        // the chat itself) — no REST call, just persist to localStorage.
+        const f = d.fields;
+        state.groupSettings = {
+          mode: f.mode,
+          responseOrder: f.responseOrder,
+          turnPromptEnabled: f.turnPromptEnabled !== false,
+          speakerNamesInHistory: !!f.speakerNamesInHistory,
+          speakerColors: !!f.speakerColors,
+          scenarioText: f.scenarioText || "",
+          inactiveCharacterIds: f.inactiveCharacterIds instanceof Set
+            ? [...f.inactiveCharacterIds]
+            : Array.isArray(f.inactiveCharacterIds) ? f.inactiveCharacterIds : [],
+        };
+        // Clear a stale focus (mode left individual, or the member is now benched/gone).
+        if (state.groupFocusCharId &&
+            (state.groupSettings.mode !== "individual" ||
+             state.groupSettings.inactiveCharacterIds.includes(state.groupFocusCharId) ||
+             !state.selectedCharacterIds.includes(state.groupFocusCharId))) {
+          state.groupFocusCharId = null;
+        }
+        state.inspecting = { kind: "group-editor", id: "group-editor" };
+        state.draft = makeDraft(state.inspecting);
+        state.isDirty = false;
+        renderAll();
+        showToast("Saved ✓", "success");
+        return;
       }
       case "preset-editor": {
         const presetId = d.sourceId;
@@ -3966,6 +4418,69 @@ function groupSelectField(currentValue) {
   const options = [["", "(none)"], ...groups.map((g) => [g.id, g.name || "(unnamed group)"])];
   return selectField("Group", currentValue || "", "groupId", options,
     "Assign this section to a group. Groups organize related sections visually.");
+}
+
+// Generic segmented pill control (like matchingModeField/wrapFormatField but
+// data-driven): options is an array of [value, label] pairs.
+function pillField(label, value, key, options, tooltip) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, label, tooltip);
+  wrap.appendChild(lab);
+  const row = document.createElement("div");
+  row.className = "kaio-match-mode";
+  for (const [val, text] of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kaio-match-btn kaio-pill-btn";
+    btn.dataset.active = String(String(value) === String(val));
+    btn.textContent = text;
+    btn.addEventListener("click", () => onFieldChange(key, val));
+    row.appendChild(btn);
+  }
+  wrap.appendChild(row);
+  return wrap;
+}
+
+// Group Chat settings panel — the console-side mirror of Marinara's Chat
+// Settings → Group Chat controls (all persisted to localStorage, applied to the
+// structural preview). Reached via the ⚙️ on the Characters (Group) source.
+function renderGroupEditorPanel() {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-preset-editor";
+  const f = state.draft.fields;
+
+  wrap.appendChild(sectionHeader("Group Chat"));
+
+  wrap.appendChild(pillField("Mode", f.mode, "mode",
+    [["merged", groupModeLabel("merged")], ["individual", groupModeLabel("individual")]],
+    "Merged: every card is stacked into one section and a single reply voices the scene. Individual: the engine builds one card per turn (others stripped, history relabeled)."));
+
+  if (f.mode === "individual") {
+    wrap.appendChild(pillField("Response order", f.responseOrder, "responseOrder",
+      [["sequential", "Sequential"], ["smart", "Smart"], ["manual", "Manual"]],
+      "Who responds each turn (a runtime choice). Sequential: members in listed order. Smart: an agent decides. Manual: you pick each speaker."));
+    wrap.appendChild(checkboxField("Add Turn To Prompt", f.turnPromptEnabled, "turnPromptEnabled",
+      'Appends a short "Respond ONLY as <name>." instruction to each individual turn.'));
+    wrap.appendChild(checkboxField("Name Prefix History", f.speakerNamesInHistory, "speakerNamesInHistory",
+      "Prefixes each chat-history turn with the speaker's name before role-merging, so the model can tell who said what."));
+  } else {
+    wrap.appendChild(checkboxField("Color Dialogues", f.speakerColors, "speakerColors",
+      'Asks the model to wrap each character’s dialogue in <speaker="name"> tags (merged mode only).'));
+  }
+
+  wrap.appendChild(field("Scenario Override", f.scenarioText, "scenarioText", "textarea",
+    "A shared scenario that replaces every character card's own scenario. Leave empty to keep each card's individual scenario.", 4));
+
+  const chars = selectedCharacters();
+  if (chars.length) {
+    wrap.appendChild(multiSelectField("Inactive members", f.inactiveCharacterIds, "inactiveCharacterIds",
+      chars.map((c) => [c.id, (c.data && c.data.name) || c.name || "Character"])));
+  }
+
+  return wrap;
 }
 
 // ── Sections management panel ─────────────────────────────────
@@ -5041,6 +5556,7 @@ function buildPromptMessagesFromSimulation(historyMessages) {
       continue;
     }
     if (b.kind === "marker") continue; // runtime-only placeholder, no content
+    if (b.kind === "group-info") continue; // UI banner, not prompt content
     const content = textOf(b);
     if (!content) continue;
     out.push({ role: roleOf(b), content });
@@ -5119,6 +5635,23 @@ function askIncludeHistory() {
 }
 
 let piBusy = false;
+// Structural-preview meta, with a group-chat caveat when a multi-character
+// group is selected — otherwise the modal stacks all member cards with no hint
+// that (in Individual mode) the engine actually builds one card per turn.
+function structuralMeta() {
+  const m = { mode: "structural" };
+  if (isGroupSelection()) {
+    const gs = state.groupSettings;
+    m.groupChat = true;
+    m.groupNote = gs.mode === "individual"
+      ? `Group chat (Individual): at runtime the engine builds ONE character per turn — it strips the other members' cards, relabels history, and `
+        + (gs.turnPromptEnabled ? `appends "Respond ONLY as <name>."` : `adds no per-turn instruction`)
+        + `. The cards below are ALL members stacked for reference, not a single request; who responds is decided by "${gs.responseOrder}" order at generation time.`
+      : `Group chat (Merged): all member cards are stacked into one character section and a single reply voices the whole scene`
+        + (gs.speakerColors ? `, with each character's dialogue wrapped in <speaker="name"> tags.` : `.`);
+  }
+  return m;
+}
 async function openPromptInspector() {
   if (piBusy) return; // ignore re-entrant clicks while a dialog/capture is pending
   piBusy = true;
@@ -5165,11 +5698,11 @@ async function openPromptInspector() {
         }
       } else {
         messages = buildPromptMessagesFromSimulation();
-        meta = { mode: "structural" };
+        meta = structuralMeta();
       }
     } else {
       messages = buildPromptMessagesFromSimulation();
-      meta = { mode: "structural" };
+      meta = structuralMeta();
     }
     showPromptInspectorModal(messages, meta);
   } finally {
@@ -5245,7 +5778,11 @@ function showPromptInspectorModal(messages, meta) {
     badge.textContent = "Live capture failed";
     badge.dataset.mode = "error";
   } else {
-    badge.textContent = meta.note ? "Raw chat history · no connection" : "Structural preview · console selection";
+    badge.textContent = meta.note
+      ? "Raw chat history · no connection"
+      : meta.groupChat
+        ? "Structural preview · group (" + (state.groupSettings.mode === "individual" ? "individual" : "merged") + ")"
+        : "Structural preview · console selection";
     badge.dataset.mode = "structural";
   }
   if (settingOn("showTokenEstimates") && messages.length && meta.mode !== "error") {
@@ -5264,10 +5801,11 @@ function showPromptInspectorModal(messages, meta) {
     viewBtn.dataset.active = view === "json" ? "true" : "";
     breaksBtn.dataset.active = show ? "true" : "";
     body.innerHTML = "";
-    if (meta.note) {
+    const noteText = meta.note || meta.groupNote;
+    if (noteText) {
       const note = document.createElement("div");
       note.className = "kaio-pi-note";
-      note.textContent = meta.note;
+      note.textContent = noteText;
       body.appendChild(note);
     }
     if (!messages.length) {
@@ -5390,7 +5928,7 @@ function showPromptInspectorModal(messages, meta) {
   bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
 }
 
-console.log("[kolache-AIO] v1.9.0 loaded — Marinara Engine 2.0.0 (REST /api)");
+console.log("[kolache-AIO] v1.10.0 loaded — Marinara Engine 2.0.0 (REST /api)");
 injectTopbarButton();
 tryInjectExtensionLauncher();
 marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });

@@ -37,11 +37,12 @@ Two utilities live in the titlebar: **🔍 Inspect** (capture the real prompt) a
 
 ## Sources
 
-Type-to-filter comboboxes for **Preset**, **Character**, and **Persona**, plus a **multi-lorebook** section. Start typing to narrow a long list — handy once you have dozens or hundreds of characters or lorebooks — then click or press Enter.
+Type-to-filter comboboxes for **Preset**, **Character(s)**, and **Persona**, plus a **multi-lorebook** section. Start typing to narrow a long list — handy once you have dozens or hundreds of characters or lorebooks — then click or press Enter.
 
 - The **Preset** picker has a ✏️ that opens the **Preset Editor**.
 - Each **lorebook** row has a ✏️ (its **Lorebook Editor**); the **active** lorebook also gets a 🔍 to **filter its entries** by name or content.
 - Add as many lorebooks as you like — each gets its own row, and only the active one expands its checklist (keeps the column compact).
+- The **Character** picker is a **multi-character group picker** when no chat is open — add rows to build a group (see **Group chats** below).
 - Your selection is **remembered** between sessions and restored when you reopen the console.
 
 <img width="273" height="121" alt="image" src="https://github.com/user-attachments/assets/c30ad9b9-f467-4478-8e11-0fb0ad050234" />
@@ -53,6 +54,22 @@ Expanding a lorebook shows its **folders at the top** (📁 icon, entry-count ba
 **Folders nest.** Child folders are indented beneath their parents, so the hierarchy is visible at a glance.
 
 <img width="278" height="287" alt="image" src="https://github.com/user-attachments/assets/e11bbfa0-1441-4eb7-b228-9b8a1cb69aa3" />
+
+### Group chats
+
+In Marinara a **group chat is just a chat with two or more characters** — there's no separate "group" object; the participant list and the group settings live on the chat itself. Because those settings are per-chat (and dynamic at generation time), the console treats group chat as a **design-time surface for when no chat is open**, exactly like the structural chat-history preview:
+
+- **No chat open →** the **Character** source becomes a multi-character picker. Add a row per character; the first is the **Primary** (index 0 = first responder), and ▲ reorders. A **⚙️ Group settings** panel (opened from the section header, or by clicking the group banner in the Simulated Prompt) mirrors Marinara's *Chat Settings → Group Chat*:
+  - **Mode** — *Merged (Narrator)* (all cards stacked into one section, one reply voices the scene) or *Individual* (the engine builds one card per turn).
+  - **Response order** — *Sequential / Smart / Manual* (Individual only; who responds is decided at runtime).
+  - **Add Turn To Prompt** — append a `Respond ONLY as <name>.` instruction per individual turn.
+  - **Name Prefix History** — prefix history turns with the speaker's name.
+  - **Color Dialogues** — wrap dialogue in `<speaker="name">` tags (Merged only).
+  - **Scenario Override** — a shared scenario that replaces each card's own scenario.
+  - **Inactive members** — bench a participant from the prompt without removing them.
+- **A chat is open →** the console **defers to the live chat**: it shows a single primary-character picker and a note pointing you to **🔍 Inspect** for the exact assembled prompt (which already reflects the real group composition and settings).
+
+In the Simulated Prompt, a group renders as a **Group** banner (mode + a plain-language note about what happens at runtime) followed by one card block per active member. In *Individual* mode, **Preview turn** on the banner focuses a single responder (others hidden) to show what one turn looks like. A Scenario Override renders as a shared **Scenario** block after the cards, and each card's own scenario is dropped from the preview — matching the engine.
 
 ---
 
@@ -158,7 +175,7 @@ Marinara runs the JS inside a function that receives a `marinara` helper API (`o
 
 ## What this does **not** do (yet)
 
-- **Multi-character / group chats aren't supported yet** — the console assembles the prompt for a single character at a time, so group composition (multiple character cards in one chat) isn't reflected in the Simulated Prompt. **Coming soon.**
+- **Group chats are a design-time preview.** Multi-character composition and group settings assemble structurally only when **no chat is open**; once a chat is active the console defers to the live **Inspect** capture (a group chat's real composition and settings live on the chat). **Individual** mode is inherently per-turn at runtime, so the preview stacks all cards (or focuses one) and *describes* the per-turn behavior — `Respond ONLY as…`, history relabeling, and **Smart/Manual** responder choice are runtime, shown as notes rather than fabricated as static structure.
 - **Agents are skipped in the Simulated Prompt** — it shows preset sections, lorebook entries, character, persona, and chat-history placeholders. (The live **Inspect** capture *does* include whatever the engine actually assembles, agents and all.)
 - **Runtime markers** (`chat_history`, `chat_summary`, `dialogue_examples`, `agent_data`) are read-only placeholders — their content is dynamic.
 - **The Simulated Prompt doesn't yet model the disabled-*ancestor* folder rule** — at generation time the engine excludes every entry in a disabled folder's whole subtree; the structural preview reflects a folder's own disabled state but not (yet) inherited disabling from a parent.

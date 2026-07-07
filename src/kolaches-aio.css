@@ -2141,3 +2141,72 @@
     border-radius: 0;
   }
 }
+
+/* ─── Group chat (multi-character sources + settings + preview) ─── */
+.kaio-char-row .kaio-folder-edit-btn { font-size: 0.75rem; }
+.kaio-primary-badge { flex: 0 0 auto; }
+
+/* Notes: the "defer to live chat" hint, and the group settings summary. */
+.kaio-group-note {
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  background: var(--secondary, #1c1c25);
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  margin-top: 0.5rem;
+}
+.kaio-group-note strong { color: var(--foreground); font-weight: 600; }
+.kaio-group-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.kaio-group-settings-link {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--primary, #a78bfa);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.6875rem;
+  padding: 0;
+  white-space: nowrap;
+}
+.kaio-group-settings-link:hover { text-decoration: underline; }
+
+/* The group banner block above the character cards. */
+.kaio-group-info .kaio-group-note { margin-top: 0.375rem; }
+.kaio-group-focus {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+.kaio-group-focus > span { flex: 0 0 auto; }
+.kaio-group-focus .kaio-select { flex: 1; min-width: 0; }
+
+/* Mode badge on the banner: reuse the green group badge for Merged, amber for
+   Individual (matching the folder-badge accent). */
+.kaio-group-badge[data-mode="individual"] {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+}
+
+/* Segmented pill controls (pillField): fill the active pill like the matching-
+   mode / wrap-format pills, which pillField's base .kaio-match-btn class alone
+   would leave with only a text-color change. */
+.kaio-match-btn.kaio-pill-btn[data-active="true"] {
+  border-color: var(--primary, #a78bfa);
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--primary, #a78bfa);
+}
+
+/* Colour-code the new block tags so they don't render as plain gray next to the
+   colour-coded Character / Persona / Section tags. */
+.kaio-block-tag[data-kind="group-info"]     { background: rgba(45, 212, 191, 0.2); color: #2dd4bf; }
+.kaio-block-tag[data-kind="group-scenario"] { background: rgba(251, 146, 60, 0.2); color: #fb923c; }
