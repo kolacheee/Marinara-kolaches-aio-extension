@@ -163,7 +163,7 @@ const state = {
   lbInspectorCollapsed: { basic: false, matching: true, contextFilters: true, matchingSources: true, timing: true, groupTag: true, advanced: true },
   // Character editor sections — Card open by default, the rest collapsed for a
   // condensed default view.
-  charEditorCollapsed: { metadata: true, card: false, dialogue: true, lorebook: true, sprites: true, gallery: true, colors: true, stats: true, advanced: true },
+  charEditorCollapsed: { metadata: true, card: false, dialogue: true, lorebook: true, colors: true, stats: true, advanced: true },
   // Character-editor textareas that are manually Expanded (by field key). Reset
   // when a different block is inspected; persists across in-session re-renders.
   charFieldExpanded: new Set(),
@@ -3698,6 +3698,161 @@ function readonlyNote(text) {
   el.textContent = text;
   return el;
 }
+// A CSS color field: a preview swatch (shows any value incl. rgba/gradient) with
+// an overlaid native picker for solid colors, plus a free-form Hex/CSS text input
+// (the source of truth — the picker only writes a hex when deliberately used).
+function colorField(label, value, key, tooltip) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, label, tooltip);
+  wrap.appendChild(lab);
+
+  const row = document.createElement("div");
+  row.className = "kaio-color-row";
+
+  const sw = document.createElement("div");
+  sw.className = "kaio-color-swatch";
+  sw.title = "Pick a solid color";
+  const setSwatch = (v) => {
+    const val = (v || "").trim();
+    // Only render it when the browser can actually parse it — an invalid/partial
+    // value assigned to style.background is a silent no-op, which would otherwise
+    // leave the swatch showing a stale color (or a blank, checkerboard-less box).
+    if (val && (typeof CSS === "undefined" || CSS.supports("background", val))) {
+      sw.style.background = val;
+      sw.dataset.empty = "false";
+    } else {
+      sw.style.background = "";
+      sw.dataset.empty = "true";
+    }
+  };
+  const picker = document.createElement("input");
+  picker.type = "color";
+  picker.className = "kaio-color-picker";
+  picker.value = /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : "#a78bfa";
+  sw.appendChild(picker);
+
+  const text = document.createElement("input");
+  text.className = "kaio-input";
+  text.type = "text";
+  text.placeholder = "#hex, rgba(), name, or gradient";
+  text.value = value ?? "";
+
+  picker.addEventListener("input", () => {
+    text.value = picker.value;
+    setSwatch(picker.value);
+    onFieldChange(key, picker.value);
+  });
+  text.addEventListener("input", () => {
+    onFieldChange(key, text.value);
+    setSwatch(text.value);
+    if (/^#[0-9a-fA-F]{6}$/.test(text.value)) picker.value = text.value;
+  });
+
+  setSwatch(value);
+  row.appendChild(sw);
+  row.appendChild(text);
+  wrap.appendChild(row);
+  return wrap;
+}
+// Character↔lorebook links live in the lorebook's `characterIds` array (a
+// join table). listByCharacter matches characterIds OR the legacy characterId
+// scalar, so mirror that when reading the current links.
+function lorebookCharIds(lb) {
+  if (Array.isArray(lb.characterIds)) return lb.characterIds;
+  return lb.characterId ? [lb.characterId] : [];
+}
+async function refreshLorebooksThenRight() {
+  state.lorebooks = await api("GET", "/lorebooks").catch(() => state.lorebooks);
+  renderRight();
+}
+// Link/unlink REPLACE the whole set (syncLorebookLinks is delete-then-insert),
+// so PATCH the full desired characterIds array. isGlobal:false is sent on link
+// because a global lorebook can't also target a character (schema superRefine).
+async function linkCharacterLorebook(charId, lbId) {
+  const lb = state.lorebooks.find((l) => l.id === lbId);
+  if (!lb || !charId) return;
+  const next = lorebookCharIds(lb).slice();
+  if (!next.includes(charId)) next.push(charId);
+  try {
+    await api("PATCH", "/lorebooks/" + lbId, { characterIds: next, isGlobal: false });
+    // Reflect the link locally so the UI stays correct even if the refetch fails.
+    lb.characterIds = next; lb.characterId = next[0] || null; lb.isGlobal = false;
+    await refreshLorebooksThenRight();
+    showToast("Lorebook linked", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Link lorebook failed", err);
+    showToast(serverErrorText(err, "Failed to link lorebook"), "error");
+  }
+}
+async function unlinkCharacterLorebook(charId, lbId) {
+  const lb = state.lorebooks.find((l) => l.id === lbId);
+  if (!lb || !charId) return;
+  const next = lorebookCharIds(lb).filter((id) => id !== charId);
+  try {
+    await api("PATCH", "/lorebooks/" + lbId, { characterIds: next });
+    lb.characterIds = next; lb.characterId = next[0] || null;
+    await refreshLorebooksThenRight();
+    showToast("Lorebook unlinked", "info"); // detach, not a create/delete — matches "Folder detached"/"Removed from group"
+  } catch (err) {
+    console.error("[kolache-AIO] Unlink lorebook failed", err);
+    showToast(serverErrorText(err, "Failed to unlink lorebook"), "error");
+  }
+}
+// The character's Lorebook section: which standalone lorebooks are linked to this
+// character (link/unlink writes the lorebook's characterIds), then the read-only
+// embedded-book summary. Linking is a separate resource edit, not part of the
+// card draft, so it applies immediately.
+function renderCharLorebookSection() {
+  const wrap = document.createElement("div");
+  const charId = state.draft && state.draft.sourceId;
+  if (!charId) { wrap.appendChild(renderCharBookSummary()); return wrap; }
+
+  const linked = state.lorebooks.filter((lb) => lorebookCharIds(lb).includes(charId));
+  if (linked.length) {
+    const list = document.createElement("div");
+    list.className = "kaio-field";
+    const lab = document.createElement("div");
+    lab.className = "kaio-field-label";
+    applyLabel(lab, "Linked lorebooks", "Standalone lorebooks assigned to this character (added to the lorebook's characterIds). They fire whenever this character is in a chat.");
+    list.appendChild(lab);
+    for (const lb of linked) {
+      const row = document.createElement("div");
+      row.className = "kaio-array-row kaio-linked-lb";
+      const name = document.createElement("span");
+      name.className = "kaio-linked-lb-name";
+      name.textContent = lb.name || "(unnamed lorebook)";
+      row.appendChild(name);
+      row.appendChild(inlineRemoveBtn("Unlink from this character", () => unlinkCharacterLorebook(charId, lb.id)));
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+  } else {
+    wrap.appendChild(readonlyNote("No standalone lorebooks are linked to this character yet."));
+  }
+
+  // Picker of link-able lorebooks (exclude already-linked + globals, which apply everywhere).
+  const available = state.lorebooks.filter((lb) => !lorebookCharIds(lb).includes(charId) && !lb.isGlobal);
+  const pickWrap = document.createElement("div");
+  pickWrap.className = "kaio-field";
+  const pickLab = document.createElement("div");
+  pickLab.className = "kaio-field-label";
+  applyLabel(pickLab, "Link a lorebook", "Assign an existing standalone lorebook to this character. Global lorebooks aren't listed — they already apply everywhere.");
+  pickWrap.appendChild(pickLab);
+  pickWrap.appendChild(renderSearchableSelect({
+    items: available.map((lb) => ({ id: lb.id, name: lb.name || lb.id })),
+    valueId: null,
+    placeholder: available.length ? "— Link a lorebook —" : "— No unlinked lorebooks —",
+    ariaLabel: "Link a lorebook",
+    onChange: (id) => { if (id) linkCharacterLorebook(charId, id); },
+  }));
+  wrap.appendChild(pickWrap);
+
+  wrap.appendChild(renderCharBookSummary());
+  return wrap;
+}
 // Set a draft field and re-render the right panel — for add/remove/reorder in
 // the array sub-editors (no active text focus to preserve).
 function updateDraftAndRerender(key, value) {
@@ -3830,12 +3985,12 @@ function renderCharBookSummary() {
   const book = state.inspecting && state.inspecting.character
     && state.inspecting.character.data && state.inspecting.character.data.character_book;
   if (!book) {
-    return readonlyNote("No embedded lorebook on this card. (Standalone lorebooks are picked and edited from the Lorebooks source on the left.)");
+    return readonlyNote("This card has no embedded lorebook. (An embedded book is a separate lorebook baked into the card — distinct from the standalone lorebooks you can link above.)");
   }
   const n = Array.isArray(book.entries) ? book.entries.length : 0;
   return readonlyNote(
     `Embedded lorebook "${book.name || "(unnamed)"}" — ${n} ${n === 1 ? "entry" : "entries"}, scan depth ${book.scan_depth ?? 2}, budget ${book.token_budget ?? 512}. `
-    + "Embedded-book entries are edited in Marinara; this console edits standalone lorebooks. The embedded book round-trips unchanged on save.");
+    + "Its entries are edited in Marinara; the embedded book round-trips unchanged on save.");
 }
 
 // The full character editor: always-visible Name/Title, then collapsible sections.
@@ -3878,15 +4033,13 @@ function renderCharacterEditor() {
     return c;
   }, co));
 
-  frag.appendChild(renderCollapsible("Lorebook", "lorebook", () => renderCharBookSummary(), co));
-  frag.appendChild(renderCollapsible("Sprites", "sprites", () => readonlyNote("Sprite expression images are files managed in Marinara's character editor — they aren't part of the card text, so they can't be edited here."), co));
-  frag.appendChild(renderCollapsible("Gallery", "gallery", () => readonlyNote("Gallery images and clips are files managed in Marinara's character editor — not part of the card text."), co));
+  frag.appendChild(renderCollapsible("Lorebook", "lorebook", () => renderCharLorebookSection(), co));
 
   frag.appendChild(renderCollapsible("Colors", "colors", () => {
     const c = document.createElement("div");
-    c.appendChild(field("Name color", f.nameColor, "nameColor", "input", "CSS color or linear-gradient() for the character's name. Empty = theme default."));
-    c.appendChild(field("Dialogue color", f.dialogueColor, "dialogueColor", "input", "Color applied to text inside quotation marks."));
-    c.appendChild(field("Message box color", f.boxColor, "boxColor", "input", "Background of this character's message bubble (roleplay mode); rgba() works best."));
+    c.appendChild(colorField("Name color", f.nameColor, "nameColor", "CSS color or linear-gradient() for the character's name. Empty = theme default. Supports gradients."));
+    c.appendChild(colorField("Dialogue color", f.dialogueColor, "dialogueColor", "Color applied to text inside quotation marks."));
+    c.appendChild(colorField("Message box color", f.boxColor, "boxColor", "Background of this character's message bubble (roleplay mode); rgba() works best."));
     return c;
   }, co));
 

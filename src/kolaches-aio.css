@@ -2260,7 +2260,59 @@
 .kaio-array-row .kaio-folder-edit-btn { align-self: center; font-size: 0.8125rem; }
 .kaio-array-row .kaio-input.kaio-pool-color { flex: 0 0 6rem; }
 
-/* Read-only informational note (Lorebook / Sprites / Gallery summaries, hints) */
+/* Linked-lorebook rows in the character editor's Lorebook section */
+.kaio-linked-lb {
+  align-items: center;
+  background: var(--secondary, #1c1c25);
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.5rem;
+}
+.kaio-linked-lb-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Color fields (Colors section): swatch preview + overlaid native picker + text */
+.kaio-color-row { display: flex; align-items: center; gap: 0.5rem; }
+.kaio-color-row .kaio-input { flex: 1; min-width: 0; }
+.kaio-color-swatch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 1.875rem;
+  height: 1.875rem;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  overflow: hidden;
+  cursor: pointer;
+}
+/* Checkerboard when no color is set */
+.kaio-color-swatch[data-empty="true"] {
+  background-image:
+    linear-gradient(45deg, var(--border, #3a3a44) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--border, #3a3a44) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--border, #3a3a44) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--border, #3a3a44) 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
+.kaio-color-picker {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Read-only informational note (embedded-lorebook summary, RPG pool hint, etc.) */
 .kaio-readonly-note {
   font-size: 0.6875rem;
   line-height: 1.45;
