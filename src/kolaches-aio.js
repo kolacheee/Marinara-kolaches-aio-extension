@@ -3868,6 +3868,15 @@ async function embedCharacterLorebook(charId, lbId) {
     }
     lb.characterIds = ids; lb.characterId = ids[0] || null; lb.isGlobal = false;
     await refreshCharLorebookState(charId);
+    // The engine mirrors the lorebook into character_book on a lorebook write, but
+    // the first write right after the forward pointer is set doesn't reliably take
+    // (the book lands only on a follow-up write). If it didn't land, poke the
+    // lorebook once more so the sync re-runs with the pointer already in place.
+    const cur = state.charactersFull[charId];
+    if (cur && getEmbeddedLorebookId(cur.data) === lbId && !cur.data.character_book) {
+      await api("PATCH", "/lorebooks/" + lbId, { characterIds: ids, isGlobal: false });
+      await refreshCharLorebookState(charId);
+    }
     showToast(replacing ? "Lorebook embedded (replaced the previous embedded one)" : "Lorebook embedded into the card", "success");
   } catch (err) {
     console.error("[kolache-AIO] Embed lorebook failed", err);
