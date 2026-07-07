@@ -320,6 +320,7 @@ function buildConsole() {
         <span class="kaio-title-emoji">🥞</span>
         <span class="kaio-title">kolache's AIO</span>
         <span class="kaio-subtitle">Prompt Viewer &amp; Editor</span>
+        <span class="kaio-tip kaio-title-tip" data-tip="Edits save to Marinara immediately, but its own editors (character/preset/lorebook/persona) may keep showing the old version until you refresh the page — Ctrl+Shift+R.">?</span>
         <span class="kaio-spacer"></span>
         <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍 Inspect</button>
         <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
@@ -3764,9 +3765,39 @@ function lorebookCharIds(lb) {
   if (Array.isArray(lb.characterIds)) return lb.characterIds;
   return lb.characterId ? [lb.characterId] : [];
 }
-async function refreshLorebooksThenRight() {
+// Shared refresh after any character↔lorebook change: re-load the character (its
+// embedded character_book may have been synced server-side), re-load the lorebook
+// list, point the inspected block at the fresh character, and repaint. The card
+// draft (in-progress field edits) is untouched — this is a separate-resource edit.
+async function refreshCharLorebookState(charId) {
+  await loadCharacter(charId);
   state.lorebooks = await api("GET", "/lorebooks").catch(() => state.lorebooks);
+  if (state.inspecting && state.inspecting.character && state.inspecting.character.id === charId && state.charactersFull[charId]) {
+    state.inspecting.character = state.charactersFull[charId];
+  }
   renderRight();
+}
+// The card's embedded-lorebook forward pointer: data.extensions.importMetadata.embeddedLorebook.lorebookId.
+function getEmbeddedLorebookId(data) {
+  const im = data && data.extensions && data.extensions.importMetadata;
+  const el = im && im.embeddedLorebook;
+  return el && typeof el.lorebookId === "string" ? el.lorebookId : null;
+}
+// Clear the card's embedded book: null character_book + drop the forward pointer.
+// Sends the FULL data (a fresh read-modify-write) because the character PATCH
+// replaces the extensions blob rather than deep-merging it.
+async function clearEmbeddedOnCharacter(charId) {
+  const fresh = normalizeCharacter(await api("GET", "/characters/" + charId));
+  const data = { ...((fresh && fresh.data) || {}) };
+  const ext = { ...(data.extensions || {}) };
+  if (ext.importMetadata && typeof ext.importMetadata === "object") {
+    const im = { ...ext.importMetadata };
+    delete im.embeddedLorebook;
+    ext.importMetadata = im;
+  }
+  data.extensions = ext;
+  data.character_book = null;
+  await api("PATCH", "/characters/" + charId, { data });
 }
 // Link/unlink REPLACE the whole set (syncLorebookLinks is delete-then-insert),
 // so PATCH the full desired characterIds array. isGlobal:false is sent on link
@@ -3778,9 +3809,8 @@ async function linkCharacterLorebook(charId, lbId) {
   if (!next.includes(charId)) next.push(charId);
   try {
     await api("PATCH", "/lorebooks/" + lbId, { characterIds: next, isGlobal: false });
-    // Reflect the link locally so the UI stays correct even if the refetch fails.
     lb.characterIds = next; lb.characterId = next[0] || null; lb.isGlobal = false;
-    await refreshLorebooksThenRight();
+    await refreshCharLorebookState(charId);
     showToast("Lorebook linked", "success");
   } catch (err) {
     console.error("[kolache-AIO] Link lorebook failed", err);
@@ -3792,13 +3822,69 @@ async function unlinkCharacterLorebook(charId, lbId) {
   if (!lb || !charId) return;
   const next = lorebookCharIds(lb).filter((id) => id !== charId);
   try {
+    // If this lorebook is the card's embedded one, clear the embedded mirror too —
+    // unlinking alone would leave a stale character_book + forward pointer behind.
+    const embeddedId = getEmbeddedLorebookId(state.inspecting && state.inspecting.character && state.inspecting.character.data);
+    if (embeddedId === lbId) await clearEmbeddedOnCharacter(charId);
     await api("PATCH", "/lorebooks/" + lbId, { characterIds: next });
     lb.characterIds = next; lb.characterId = next[0] || null;
-    await refreshLorebooksThenRight();
+    await refreshCharLorebookState(charId);
     showToast("Lorebook unlinked", "info"); // detach, not a create/delete — matches "Folder detached"/"Removed from group"
   } catch (err) {
     console.error("[kolache-AIO] Unlink lorebook failed", err);
+    await refreshCharLorebookState(charId); // re-sync after a possibly half-applied clear+unlink
     showToast(serverErrorText(err, "Failed to unlink lorebook"), "error");
+  }
+}
+// Embed a linked lorebook INTO the card so it travels on export (data.character_book).
+// Order matters: set the character's forward pointer FIRST (the engine's sync only
+// fires when the card already points at this lorebook), then PATCH the lorebook's
+// characterIds — which triggers syncCharacterBookFromLorebook to mirror its entries
+// into the card. One embedded book per card, so this replaces any prior embed.
+async function embedCharacterLorebook(charId, lbId) {
+  const lb = state.lorebooks.find((l) => l.id === lbId);
+  if (!lb || !charId) return;
+  // One embedded book per card — note if we're displacing a different one.
+  const prevEmbeddedId = getEmbeddedLorebookId(state.inspecting && state.inspecting.character && state.inspecting.character.data);
+  const replacing = !!(prevEmbeddedId && prevEmbeddedId !== lbId);
+  try {
+    const fresh = normalizeCharacter(await api("GET", "/characters/" + charId));
+    const data = { ...((fresh && fresh.data) || {}) };
+    const ext = { ...(data.extensions || {}) };
+    const im = { ...(ext.importMetadata || {}) };
+    im.embeddedLorebook = { hasEmbeddedLorebook: true, lorebookId: lbId };
+    ext.importMetadata = im;
+    data.extensions = ext;
+    await api("PATCH", "/characters/" + charId, { data });                            // 1. forward pointer (must precede the sync trigger)
+    // 2. back-pointer, with the target hoisted to characterIds[0]: the engine syncs
+    //    into characterIds[0], so the target MUST be first or the mirror never fires.
+    const ids = [charId, ...lorebookCharIds(lb).filter((id) => id !== charId)];
+    try {
+      await api("PATCH", "/lorebooks/" + lbId, { characterIds: ids, isGlobal: false });
+    } catch (lbErr) {
+      // Undo the forward pointer so we don't strand a "points here, no book" card.
+      await clearEmbeddedOnCharacter(charId).catch(() => {});
+      throw lbErr;
+    }
+    lb.characterIds = ids; lb.characterId = ids[0] || null; lb.isGlobal = false;
+    await refreshCharLorebookState(charId);
+    showToast(replacing ? "Lorebook embedded (replaced the previous embedded one)" : "Lorebook embedded into the card", "success");
+  } catch (err) {
+    console.error("[kolache-AIO] Embed lorebook failed", err);
+    await refreshCharLorebookState(charId); // re-sync the UI to the actual server state
+    showToast(serverErrorText(err, "Failed to embed lorebook"), "error");
+  }
+}
+// Remove the embedded copy (character_book + forward pointer) but keep the link.
+async function unembedCharacterLorebook(charId) {
+  if (!charId) return;
+  try {
+    await clearEmbeddedOnCharacter(charId);
+    await refreshCharLorebookState(charId);
+    showToast("Lorebook un-embedded (still linked)", "info");
+  } catch (err) {
+    console.error("[kolache-AIO] Un-embed lorebook failed", err);
+    showToast(serverErrorText(err, "Failed to un-embed lorebook"), "error");
   }
 }
 // The character's Lorebook section: which standalone lorebooks are linked to this
@@ -3810,13 +3896,16 @@ function renderCharLorebookSection() {
   const charId = state.draft && state.draft.sourceId;
   if (!charId) { wrap.appendChild(renderCharBookSummary()); return wrap; }
 
+  const charData = (state.inspecting && state.inspecting.character && state.inspecting.character.data) || {};
+  const embeddedId = getEmbeddedLorebookId(charData);
+  const hasCharacterBook = !!charData.character_book;
   const linked = state.lorebooks.filter((lb) => lorebookCharIds(lb).includes(charId));
   if (linked.length) {
     const list = document.createElement("div");
     list.className = "kaio-field";
     const lab = document.createElement("div");
     lab.className = "kaio-field-label";
-    applyLabel(lab, "Linked lorebooks", "Standalone lorebooks assigned to this character (added to the lorebook's characterIds). They fire whenever this character is in a chat.");
+    applyLabel(lab, "Linked lorebooks", "Standalone lorebooks assigned to this character (added to the lorebook's characterIds). They fire whenever this character is in a chat. Embed one to also bake it into the card so it travels on export.");
     list.appendChild(lab);
     for (const lb of linked) {
       const row = document.createElement("div");
@@ -3825,13 +3914,36 @@ function renderCharLorebookSection() {
       name.className = "kaio-linked-lb-name";
       name.textContent = lb.name || "(unnamed lorebook)";
       row.appendChild(name);
+      // Require BOTH the forward pointer AND a real character_book — so a stray
+      // pointer with no baked-in book reads as "Embed" (retry), not "Embedded".
+      const isEmbedded = embeddedId === lb.id && hasCharacterBook;
+      if (isEmbedded) {
+        const badge = document.createElement("span");
+        badge.className = "kaio-group-badge kaio-embedded-badge";
+        badge.textContent = "Embedded";
+        badge.title = "Baked into the card — travels with it on export";
+        row.appendChild(badge);
+      }
+      const embedBtn = document.createElement("button");
+      embedBtn.type = "button";
+      embedBtn.className = "kaio-embed-btn";
+      embedBtn.textContent = isEmbedded ? "Un-embed" : "Embed";
+      embedBtn.title = isEmbedded
+        ? "Remove the baked-in copy from the card (keeps it linked)"
+        : "Bake this lorebook into the card so it exports with it. One embedded book per card — this replaces any current one.";
+      embedBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (isEmbedded) unembedCharacterLorebook(charId);
+        else embedCharacterLorebook(charId, lb.id);
+      });
+      row.appendChild(embedBtn);
       row.appendChild(inlineRemoveBtn("Unlink from this character", () => unlinkCharacterLorebook(charId, lb.id)));
       list.appendChild(row);
     }
     wrap.appendChild(list);
-  } else {
-    wrap.appendChild(readonlyNote("No standalone lorebooks are linked to this character yet."));
   }
+  // When nothing is linked we show no bubble here — the "Link a lorebook" picker
+  // below already conveys it, and the embedded-book note explains the distinction.
 
   // Picker of link-able lorebooks (exclude already-linked + globals, which apply everywhere).
   const available = state.lorebooks.filter((lb) => !lorebookCharIds(lb).includes(charId) && !lb.isGlobal);
@@ -3850,12 +3962,13 @@ function renderCharLorebookSection() {
   }));
   wrap.appendChild(pickWrap);
 
-  // Embedded-book summary: always show it when there IS an embedded book; when
-  // there isn't, only show the explanatory note if nothing is linked either —
-  // once a lorebook is linked, the "no embedded lorebook" note is just clutter.
-  const hasEmbedded = !!(state.inspecting && state.inspecting.character
-    && state.inspecting.character.data && state.inspecting.character.data.character_book);
-  if (hasEmbedded || !linked.length) wrap.appendChild(renderCharBookSummary());
+  // Embedded-book summary: only when it isn't already shown as an "Embedded"
+  // linked row — i.e. an orphaned embedded book (e.g. an imported card whose
+  // lorebook isn't linked), or the explanatory note when nothing is linked at all.
+  const embeddedInLinked = embeddedId && hasCharacterBook && linked.some((lb) => lb.id === embeddedId);
+  if ((hasCharacterBook && !embeddedInLinked) || (!hasCharacterBook && !linked.length)) {
+    wrap.appendChild(renderCharBookSummary());
+  }
   return wrap;
 }
 // Set a draft field and re-render the right panel — for add/remove/reorder in

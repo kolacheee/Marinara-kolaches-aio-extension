@@ -1011,6 +1011,8 @@
   flex-shrink: 0;
   line-height: 1;
 }
+/* The info tip in the titlebar sits next to the subtitle/title */
+.kaio-title-tip { align-self: center; margin-left: 0.125rem; }
 .kaio-tooltip-popup {
   position: fixed;
   width: 210px;
@@ -2291,6 +2293,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.kaio-linked-lb .kaio-embedded-badge {
+  flex: 0 0 auto;
+  background: rgba(45, 212, 191, 0.18);
+  color: #2dd4bf;
+}
+.kaio-embed-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border, #27272a);
+  border-radius: 0.375rem;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 0.625rem;
+  padding: 0.125rem 0.375rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kaio-embed-btn:hover { color: var(--primary, #a78bfa); border-color: var(--primary, #a78bfa); }
 
 /* Color fields (Colors section): swatch preview + overlaid native picker + text */
 .kaio-color-row { display: flex; align-items: center; gap: 0.5rem; }
