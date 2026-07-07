@@ -2227,3 +2227,47 @@
    colour-coded Character / Persona / Section tags. */
 .kaio-block-tag[data-kind="group-info"]     { background: rgba(45, 212, 191, 0.2); color: #2dd4bf; }
 .kaio-block-tag[data-kind="group-scenario"] { background: rgba(251, 146, 60, 0.2); color: #fb923c; }
+
+/* ─── Character editor: auto-growing textareas, sliders, array rows ─── */
+.kaio-textarea.kaio-autogrow {
+  resize: none;
+  overflow-y: hidden;   /* JS sets height + toggles overflow at the 5-line cap */
+  min-height: 2.5rem;
+}
+/* Override .kaio-expand-toggle's absolute positioning (meant for the simulated-
+   prompt block, which is position:relative) so the toggle sits in normal flow
+   under its textarea instead of anchoring to the console shell corner. */
+.kaio-autogrow-toggle { position: static; display: inline-block; margin-top: 0.25rem; }
+
+/* Talkativeness slider + readout */
+.kaio-slider-row { display: flex; align-items: center; gap: 0.5rem; }
+.kaio-slider { flex: 1; min-width: 0; accent-color: var(--primary, #a78bfa); cursor: pointer; }
+.kaio-slider-val {
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  min-width: 2.25rem;
+  text-align: right;
+}
+
+/* Compact rows for alternate greetings / RPG attributes / pools */
+.kaio-array-row { display: flex; align-items: flex-start; gap: 0.375rem; margin-bottom: 0.375rem; }
+.kaio-array-row .kaio-textarea { flex: 1; min-width: 0; }
+.kaio-array-row .kaio-input { min-width: 0; }
+.kaio-array-row .kaio-input[type="text"] { flex: 1; }
+.kaio-array-row .kaio-input[type="number"] { flex: 0 0 4.5rem; }
+.kaio-array-row .kaio-folder-edit-btn { align-self: center; font-size: 0.8125rem; }
+.kaio-array-row .kaio-input.kaio-pool-color { flex: 0 0 6rem; }
+
+/* Read-only informational note (Lorebook / Sprites / Gallery summaries, hints) */
+.kaio-readonly-note {
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  background: var(--secondary, #1c1c25);
+  border: 1px dashed var(--border, #27272a);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  margin-bottom: 0.5rem;
+}

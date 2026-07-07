@@ -161,6 +161,12 @@ const state = {
   presetEditorCollapsed: { overview: false, sections: false, variables: false },
   lbEditorCollapsed: { overview: false },
   lbInspectorCollapsed: { basic: false, matching: true, contextFilters: true, matchingSources: true, timing: true, groupTag: true, advanced: true },
+  // Character editor sections — Card open by default, the rest collapsed for a
+  // condensed default view.
+  charEditorCollapsed: { metadata: true, card: false, dialogue: true, lorebook: true, sprites: true, gallery: true, colors: true, stats: true, advanced: true },
+  // Character-editor textareas that are manually Expanded (by field key). Reset
+  // when a different block is inspected; persists across in-session re-renders.
+  charFieldExpanded: new Set(),
   presetGroupBatchAdd: { groupId: null, selected: new Set() },
   // Which variable is expanded in the preset variables panel (null = none)
   presetExpandedVariableId: null,
@@ -2931,6 +2937,7 @@ function inspectBlock(block) {
   state.draft = makeDraft(block);
   state.isDirty = false;
   state.folderBatchAdd = { showNested: false, selected: new Set() };
+  state.charFieldExpanded.clear(); // fresh expand state per inspected block
   renderMiddle();   // re-paint selection state
   renderRight();
   switchMobileTab("right");
@@ -3013,17 +3020,45 @@ function makeDraft(block) {
       }
     case "character":
       {
-        const d = block.character.data || {};
+        const c = block.character || {};
+        const d = c.data || {};
+        const e = d.extensions || {};
+        const dp = e.depth_prompt || {};
         return {
           kind: "character",
-          sourceId: block.character.id,
+          sourceId: c.id,
           fields: {
+            // Metadata
             name: d.name || "",
+            comment: c.comment || "",           // record-level "Title / comment"
+            creator: d.creator || "",
+            character_version: d.character_version || "",
+            tags: Array.isArray(d.tags) ? d.tags.join(", ") : "",
+            talkativeness: e.talkativeness ?? 0.5,
+            fav: !!e.fav,
+            creator_notes: d.creator_notes || "",
+            // Card
             description: d.description || "",
             personality: d.personality || "",
+            backstory: e.backstory || "",        // extensions.*
+            appearance: e.appearance || "",      // extensions.*
             scenario: d.scenario || "",
+            // Dialogue
+            first_mes: d.first_mes || "",
+            mes_example: d.mes_example || "",
+            alternate_greetings: Array.isArray(d.alternate_greetings) ? d.alternate_greetings.slice() : [],
+            // Colors (extensions.*)
+            nameColor: e.nameColor || "",
+            dialogueColor: e.dialogueColor || "",
+            boxColor: e.boxColor || "",
+            // Stats (extensions.rpgStats)
+            rpgStats: normalizeRpgStats(e.rpgStats),
+            // Advanced
             system_prompt: d.system_prompt || "",
             post_history_instructions: d.post_history_instructions || "",
+            depthPrompt: dp.prompt || "",        // extensions.depth_prompt.*
+            depthDepth: dp.depth ?? 4,
+            depthRole: dp.role || "system",
           },
         };
       }
@@ -3303,13 +3338,7 @@ function renderRight() {
     }
 
     case "character":
-      rightBodyEl.appendChild(field("Name", f.name, "name", "input"));
-      rightBodyEl.appendChild(field("Description", f.description, "description", "textarea"));
-      rightBodyEl.appendChild(field("Personality", f.personality, "personality", "textarea"));
-      rightBodyEl.appendChild(field("Scenario", f.scenario, "scenario", "textarea"));
-      rightBodyEl.appendChild(field("System prompt", f.system_prompt, "system_prompt", "textarea"));
-      rightBodyEl.appendChild(field("Post-history instructions",
-        f.post_history_instructions, "post_history_instructions", "textarea"));
+      rightBodyEl.appendChild(renderCharacterEditor());
       break;
 
     case "persona":
@@ -3573,6 +3602,312 @@ function multiSelectField(label, value, key, options) {
   wrap.appendChild(list);
   return wrap;
 }
+// ── Character editor helpers ───────────────────────────────────
+// Grow a textarea to fit its content up to ~5 lines; beyond that it scrolls
+// (collapsed) or shows everything (expanded). Returns whether content overflows
+// the 5-line cap. Guards against the collapsed-section (display:none) case.
+function autoGrow(ta, expanded) {
+  ta.style.height = "auto";
+  const cs = getComputedStyle(ta);
+  const line = parseFloat(cs.lineHeight) || 18;
+  const padV = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+    + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  const cap = Math.round(line * 5 + padV);
+  const full = ta.scrollHeight;
+  const overflow = full > cap + 2;
+  if (expanded) {
+    ta.style.height = full + "px";
+    ta.style.overflowY = "hidden";
+  } else {
+    ta.style.height = Math.min(full, cap) + "px";
+    ta.style.overflowY = overflow ? "auto" : "hidden";
+  }
+  return overflow;
+}
+// A heavy-text field: auto-grows with content to ~5 lines, then an Expand/Compress
+// toggle appears. Expanded state persists (by field key) across re-renders so
+// adding a greeting / opening another section doesn't snap a field back shut.
+function autoField(label, value, key, tooltip) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, label, tooltip);
+  wrap.appendChild(lab);
+
+  const ta = document.createElement("textarea");
+  ta.className = "kaio-textarea kaio-autogrow";
+  ta.rows = 2;
+  ta.value = value ?? "";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "kaio-expand-toggle kaio-autogrow-toggle";
+  toggle.hidden = true;
+  let expanded = state.charFieldExpanded.has(key);
+  const resize = () => {
+    const overflow = autoGrow(ta, expanded);
+    if (overflow || expanded) { toggle.hidden = false; toggle.textContent = expanded ? "Compress" : "Expand"; }
+    else { toggle.hidden = true; }
+  };
+  ta.addEventListener("input", () => { onFieldChange(key, ta.value); resize(); });
+  toggle.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    expanded = !expanded;
+    if (expanded) state.charFieldExpanded.add(key); else state.charFieldExpanded.delete(key);
+    resize();
+    ta.focus();
+  });
+  wrap.appendChild(ta);
+  wrap.appendChild(toggle);
+  requestAnimationFrame(resize); // size once the field is laid out
+  return wrap;
+}
+// 0..1 range slider with a live numeric readout (talkativeness).
+function sliderField(label, value, key, tooltip) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("label");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, label, tooltip);
+  wrap.appendChild(lab);
+  const row = document.createElement("div");
+  row.className = "kaio-slider-row";
+  const input = document.createElement("input");
+  input.type = "range";
+  input.className = "kaio-slider";
+  // 0.01 step so a stored value that isn't a 0.05 multiple isn't silently
+  // snapped/overwritten on first drag (Marinara's own UI uses 0.05 multiples).
+  input.min = "0"; input.max = "1"; input.step = "0.01";
+  input.value = String(value ?? 0.5);
+  const out = document.createElement("span");
+  out.className = "kaio-slider-val";
+  out.textContent = Number(input.value).toFixed(2);
+  input.addEventListener("input", () => {
+    out.textContent = Number(input.value).toFixed(2);
+    onFieldChange(key, Number(input.value));
+  });
+  row.appendChild(input);
+  row.appendChild(out);
+  wrap.appendChild(row);
+  return wrap;
+}
+function readonlyNote(text) {
+  const el = document.createElement("div");
+  el.className = "kaio-readonly-note";
+  el.textContent = text;
+  return el;
+}
+// Set a draft field and re-render the right panel — for add/remove/reorder in
+// the array sub-editors (no active text focus to preserve).
+function updateDraftAndRerender(key, value) {
+  state.draft.fields[key] = value;
+  state.isDirty = isDraftDirty();
+  renderRight();
+}
+
+// RPG-stats normalizers (load-side and save-side).
+function normalizeRpgStats(rs) {
+  rs = rs || {};
+  const attributes = Array.isArray(rs.attributes)
+    ? rs.attributes.map((a) => ({ name: String((a && a.name) || ""), value: Number(a && a.value) || 0 })) : [];
+  const pools = Array.isArray(rs.pools)
+    ? rs.pools.map((p) => ({ name: String((p && p.name) || ""), value: Number(p && p.value) || 0, max: Number(p && p.max) || 0, color: String((p && p.color) || "#a78bfa") })) : [];
+  const hp = rs.hp && typeof rs.hp === "object" ? { value: Number(rs.hp.value) || 0, max: Number(rs.hp.max) || 0 } : { value: 100, max: 100 };
+  return { enabled: !!rs.enabled, attributes, pools, hp };
+}
+function cleanRpgStats(rs) {
+  const attributes = (rs.attributes || []).map((a) => ({ name: (a.name || "").trim(), value: Number(a.value) || 0 })).filter((a) => a.name);
+  const pools = (rs.pools || []).map((p) => ({ name: (p.name || "").trim(), value: Number(p.value) || 0, max: Math.max(1, Number(p.max) || 1), color: p.color || "#a78bfa" })).filter((p) => p.name);
+  const hpPool = pools.find((p) => p.name.toLowerCase() === "hp");
+  const hp = hpPool ? { value: hpPool.value, max: hpPool.max } : (rs.hp || { value: 100, max: 100 });
+  return { enabled: !!rs.enabled, attributes, pools, hp };
+}
+// Small labelled number/text inputs used inside array rows (in-place, no re-render).
+function inlineInput(value, placeholder, type, onInput, opts) {
+  const i = document.createElement("input");
+  i.className = "kaio-input";
+  i.type = type || "text";
+  if (type === "number" && opts) { if (opts.min != null) i.min = String(opts.min); if (opts.step != null) i.step = String(opts.step); }
+  i.placeholder = placeholder || "";
+  i.value = value == null ? "" : String(value);
+  i.addEventListener("input", () => onInput(type === "number" ? (Number(i.value) || 0) : i.value));
+  return i;
+}
+function inlineRemoveBtn(title, onClick) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "kaio-folder-edit-btn"; b.innerHTML = "✕"; b.title = title;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// Alternate greetings — list of auto-growing textareas with add/remove.
+function greetingsEditor(list) {
+  const wrap = document.createElement("div");
+  wrap.className = "kaio-field";
+  const lab = document.createElement("div");
+  lab.className = "kaio-field-label";
+  applyLabel(lab, "Alternate greetings", "Extra opening messages to swipe between. {{user}}/{{char}} work here.");
+  wrap.appendChild(lab);
+  list.forEach((g, i) => {
+    const row = document.createElement("div");
+    row.className = "kaio-array-row";
+    const ta = document.createElement("textarea");
+    ta.className = "kaio-textarea kaio-autogrow";
+    ta.rows = 2;
+    ta.value = g ?? "";
+    ta.addEventListener("input", () => { list[i] = ta.value; autoGrow(ta, false); refreshDirtyFooter(); });
+    row.appendChild(ta);
+    row.appendChild(inlineRemoveBtn("Remove greeting", () => { list.splice(i, 1); updateDraftAndRerender("alternate_greetings", list); }));
+    wrap.appendChild(row);
+    requestAnimationFrame(() => autoGrow(ta, false));
+  });
+  const add = document.createElement("button");
+  add.type = "button"; add.className = "kaio-create-btn"; add.textContent = "+ Greeting";
+  add.addEventListener("click", () => { list.push(""); updateDraftAndRerender("alternate_greetings", list); });
+  wrap.appendChild(add);
+  return wrap;
+}
+
+// RPG stats — enabled toggle + attribute rows + pool rows.
+function renderRpgStatsEditor(rs) {
+  const wrap = document.createElement("div");
+
+  const en = document.createElement("label");
+  en.className = "kaio-checkbox";
+  const cb = document.createElement("input");
+  cb.type = "checkbox"; cb.checked = !!rs.enabled;
+  cb.addEventListener("change", () => { rs.enabled = cb.checked; refreshDirtyFooter(); });
+  en.appendChild(cb);
+  const enTxt = document.createElement("span");
+  enTxt.textContent = "Enable RPG stats";
+  en.appendChild(enTxt);
+  en.appendChild(tipIcon("When on, stats are injected into the prompt (as rpg_attributes) and tracked by the Character Tracker agent."));
+  wrap.appendChild(en);
+
+  wrap.appendChild(sectionHeader("Attributes"));
+  rs.attributes.forEach((a, i) => {
+    const row = document.createElement("div");
+    row.className = "kaio-array-row";
+    row.appendChild(inlineInput(a.name, "Name (STR…)", "text", (v) => { a.name = v; refreshDirtyFooter(); }));
+    row.appendChild(inlineInput(a.value, "0", "number", (v) => { a.value = v; refreshDirtyFooter(); }));
+    row.appendChild(inlineRemoveBtn("Remove attribute", () => { rs.attributes.splice(i, 1); updateDraftAndRerender("rpgStats", rs); }));
+    wrap.appendChild(row);
+  });
+  const addA = document.createElement("button");
+  addA.type = "button"; addA.className = "kaio-create-btn"; addA.textContent = "+ Attribute";
+  addA.addEventListener("click", () => { rs.attributes.push({ name: "", value: 0 }); updateDraftAndRerender("rpgStats", rs); });
+  wrap.appendChild(addA);
+
+  wrap.appendChild(sectionHeader("Pools"));
+  const poolsHint = document.createElement("div");
+  poolsHint.className = "kaio-readonly-note";
+  poolsHint.textContent = "HP/MP/…-style bars: name, current, max, and a #rrggbb color. A pool named \"HP\" also syncs the card's hp on save.";
+  wrap.appendChild(poolsHint);
+  rs.pools.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.className = "kaio-array-row";
+    row.appendChild(inlineInput(p.name, "Name (HP…)", "text", (v) => { p.name = v; refreshDirtyFooter(); }));
+    row.appendChild(inlineInput(p.value, "0", "number", (v) => { p.value = v; refreshDirtyFooter(); }));
+    row.appendChild(inlineInput(p.max, "max", "number", (v) => { p.max = v; refreshDirtyFooter(); }, { min: 1 }));
+    // Plain text (not <input type=color>) so free-form CSS colors — rgba(),
+    // named, gradients — round-trip instead of snapping to a 6-digit hex.
+    const color = inlineInput(p.color, "#rrggbb", "text", (v) => { p.color = v; refreshDirtyFooter(); });
+    color.classList.add("kaio-pool-color");
+    row.appendChild(color);
+    row.appendChild(inlineRemoveBtn("Remove pool", () => { rs.pools.splice(i, 1); updateDraftAndRerender("rpgStats", rs); }));
+    wrap.appendChild(row);
+  });
+  const addP = document.createElement("button");
+  addP.type = "button"; addP.className = "kaio-create-btn"; addP.textContent = "+ Pool";
+  addP.addEventListener("click", () => { rs.pools.push({ name: "", value: 0, max: 100, color: "#a78bfa" }); updateDraftAndRerender("rpgStats", rs); });
+  wrap.appendChild(addP);
+  return wrap;
+}
+
+// Read-only summary of the card's embedded lorebook (character_book).
+function renderCharBookSummary() {
+  const book = state.inspecting && state.inspecting.character
+    && state.inspecting.character.data && state.inspecting.character.data.character_book;
+  if (!book) {
+    return readonlyNote("No embedded lorebook on this card. (Standalone lorebooks are picked and edited from the Lorebooks source on the left.)");
+  }
+  const n = Array.isArray(book.entries) ? book.entries.length : 0;
+  return readonlyNote(
+    `Embedded lorebook "${book.name || "(unnamed)"}" — ${n} ${n === 1 ? "entry" : "entries"}, scan depth ${book.scan_depth ?? 2}, budget ${book.token_budget ?? 512}. `
+    + "Embedded-book entries are edited in Marinara; this console edits standalone lorebooks. The embedded book round-trips unchanged on save.");
+}
+
+// The full character editor: always-visible Name/Title, then collapsible sections.
+function renderCharacterEditor() {
+  const f = state.draft.fields;
+  const frag = document.createDocumentFragment();
+  const co = { stateObj: state.charEditorCollapsed };
+
+  frag.appendChild(field("Name", f.name, "name", "input", "Display name; used as {{char}} in prompts. The only required field."));
+  frag.appendChild(field("Title / comment", f.comment, "comment", "input", "Optional label for this version (e.g. \"Modern AU\"). Stored on the record, not sent to the model."));
+
+  frag.appendChild(renderCollapsible("Metadata", "metadata", () => {
+    const c = document.createElement("div");
+    c.appendChild(rowOf(
+      field("Creator", f.creator, "creator", "input", "Who made the character (credit when sharing)."),
+      field("Version", f.character_version, "character_version", "input", "Version string, e.g. \"1.0\"."),
+    ));
+    c.appendChild(field("Tags", f.tags, "tags", "input", "Comma-separated tags for search/organization."));
+    c.appendChild(sliderField("Talkativeness", f.talkativeness, "talkativeness", "How often this character speaks in group chats. 0 = rarely unless addressed, 1 = responds to almost everything."));
+    c.appendChild(checkboxField("Favorite", f.fav, "fav", "Marks the character as a favorite in Marinara."));
+    c.appendChild(autoField("Creator notes", f.creator_notes, "creator_notes", "Private notes — not sent to the model."));
+    return c;
+  }, co));
+
+  frag.appendChild(renderCollapsible("Card", "card", () => {
+    const c = document.createElement("div");
+    c.appendChild(autoField("Description", f.description, "description", "General identity/role; sent in every prompt as part of who the character is."));
+    c.appendChild(autoField("Personality", f.personality, "personality", "Temperament, behavior, speech habits, emotional patterns."));
+    c.appendChild(autoField("Backstory", f.backstory, "backstory", "History, origin, relationships, formative events."));
+    c.appendChild(autoField("Appearance", f.appearance, "appearance", "Physical description, clothing, distinguishing marks."));
+    c.appendChild(autoField("Scenario", f.scenario, "scenario", "Default setting/situation for new interactions."));
+    return c;
+  }, co));
+
+  frag.appendChild(renderCollapsible("Dialogue & greetings", "dialogue", () => {
+    const c = document.createElement("div");
+    c.appendChild(autoField("First message", f.first_mes, "first_mes", "Opening message for a new chat."));
+    c.appendChild(autoField("Example dialogue", f.mes_example, "mes_example", "Teaches voice/formatting; use <START> to separate examples and {{user}}/{{char}} placeholders."));
+    c.appendChild(greetingsEditor(f.alternate_greetings));
+    return c;
+  }, co));
+
+  frag.appendChild(renderCollapsible("Lorebook", "lorebook", () => renderCharBookSummary(), co));
+  frag.appendChild(renderCollapsible("Sprites", "sprites", () => readonlyNote("Sprite expression images are files managed in Marinara's character editor — they aren't part of the card text, so they can't be edited here."), co));
+  frag.appendChild(renderCollapsible("Gallery", "gallery", () => readonlyNote("Gallery images and clips are files managed in Marinara's character editor — not part of the card text."), co));
+
+  frag.appendChild(renderCollapsible("Colors", "colors", () => {
+    const c = document.createElement("div");
+    c.appendChild(field("Name color", f.nameColor, "nameColor", "input", "CSS color or linear-gradient() for the character's name. Empty = theme default."));
+    c.appendChild(field("Dialogue color", f.dialogueColor, "dialogueColor", "input", "Color applied to text inside quotation marks."));
+    c.appendChild(field("Message box color", f.boxColor, "boxColor", "input", "Background of this character's message bubble (roleplay mode); rgba() works best."));
+    return c;
+  }, co));
+
+  frag.appendChild(renderCollapsible("Stats (RPG)", "stats", () => renderRpgStatsEditor(f.rpgStats), co));
+
+  frag.appendChild(renderCollapsible("Advanced", "advanced", () => {
+    const c = document.createElement("div");
+    c.appendChild(autoField("System prompt", f.system_prompt, "system_prompt", "Character-specific instructions injected via the preset's character block. Does not replace the chat system prompt."));
+    c.appendChild(autoField("Post-history instructions", f.post_history_instructions, "post_history_instructions", "Text inserted after chat history, right before generation."));
+    c.appendChild(sectionHeader("Depth prompt"));
+    c.appendChild(autoField("Text", f.depthPrompt, "depthPrompt", "Injected at a chosen depth in the chat history."));
+    c.appendChild(rowOf(
+      numberField("Depth", f.depthDepth, "depthDepth", "0 = after the latest message; 4 = four messages back."),
+      selectField("Role", f.depthRole, "depthRole", ["system", "user", "assistant"]),
+    ));
+    return c;
+  }, co));
+
+  return frag;
+}
+
 // Returns the parsed option array for a choice block (the API returns it as a
 // JSON-encoded text column, but tolerate it already being an array).
 function choiceBlockOptions(cb) {
@@ -4055,16 +4390,24 @@ function onFieldChange(key, value) {
   } else {
     state.draft.fields[key] = value;
   }
-  state.isDirty = isDraftDirty();
   // Section's injectionPosition toggles whether the Depth/Order row is
   // rendered, so re-render the whole inspector when it changes. Other fields
   // can patch the footer in place to preserve focus / caret.
   if ((state.draft.kind === "section" && key === "injectionPosition") ||
       (state.draft.kind === "group-editor" && (key === "mode" || key === "responseOrder")) ||
       key === "matchingMode" || key === "wrapFormat" || key === "category") {
+    state.isDirty = isDraftDirty();
     renderRight();
     return;
   }
+  refreshDirtyFooter();
+}
+// Recompute dirty state and patch the footer (dot / label / Save+Revert enabled)
+// in place — used by onFieldChange and by the character editor's array sub-editors
+// so an in-place text edit doesn't need a full re-render (which would drop focus).
+function refreshDirtyFooter() {
+  state.isDirty = isDraftDirty();
+  if (!rightFooterEl) return;
   const dot = rightFooterEl.querySelector(".kaio-dirty-dot");
   if (dot) dot.dataset.dirty = state.isDirty ? "true" : "false";
   const txt = rightFooterEl.querySelector("span:nth-child(2)");
@@ -4157,9 +4500,48 @@ async function saveDraft() {
         break;
       }
       case "character": {
+        const f = d.fields;
         const fresh = normalizeCharacter(await api("GET", "/characters/" + d.sourceId));
-        const newData = { ...(fresh.data || {}), ...d.fields };
-        await api("PATCH", "/characters/" + d.sourceId, { data: newData });
+        const fd = (fresh && fresh.data) || {};
+        const csv = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
+        // Merge into extensions so passthrough keys (avatarCrop, trackerCardColors,
+        // world, conversationStatus, …) survive untouched. Only materialize a key
+        // when it carries a value or the card already had it — a minimal diff that
+        // matches the colors/rpgStats gating and avoids stamping empty defaults
+        // (e.g. an empty depth_prompt) onto cards that never used them.
+        const had = fd.extensions || {};
+        const ext = { ...had };
+        const gate = (key, value, keep) => { if (keep || (key in had)) ext[key] = value; else delete ext[key]; };
+        gate("backstory", f.backstory, !!f.backstory);
+        gate("appearance", f.appearance, !!f.appearance);
+        gate("talkativeness", Number(f.talkativeness), Number(f.talkativeness) !== 0.5);
+        gate("fav", !!f.fav, !!f.fav);
+        gate("depth_prompt",
+          { prompt: f.depthPrompt || "", depth: Math.max(0, Math.round(Number(f.depthDepth) || 0)), role: f.depthRole || "system" },
+          !!(f.depthPrompt && f.depthPrompt.trim()));
+        for (const k of ["nameColor", "dialogueColor", "boxColor"]) {
+          if (f[k] && f[k].trim()) ext[k] = f[k]; else delete ext[k];
+        }
+        // Only persist rpgStats if it's enabled or the card already carried it.
+        if (f.rpgStats && (f.rpgStats.enabled || had.rpgStats)) ext.rpgStats = cleanRpgStats(f.rpgStats);
+        const newData = {
+          ...fd,                                  // preserve character_book + any passthrough top-level keys
+          name: f.name,
+          description: f.description,
+          personality: f.personality,
+          scenario: f.scenario,
+          first_mes: f.first_mes,
+          mes_example: f.mes_example,
+          creator_notes: f.creator_notes,
+          system_prompt: f.system_prompt,
+          post_history_instructions: f.post_history_instructions,
+          creator: f.creator,
+          character_version: f.character_version,
+          tags: csv(f.tags),
+          alternate_greetings: Array.isArray(f.alternate_greetings) ? f.alternate_greetings.filter((g) => g != null && String(g).trim() !== "") : [],
+          extensions: ext,
+        };
+        await api("PATCH", "/characters/" + d.sourceId, { data: newData, comment: f.comment || "" });
         await loadCharacter(d.sourceId);
         // A standalone "+ Character" editor has an id the save-tail can't
         // re-match (no rendered block), so re-inspect it here to keep it open.
