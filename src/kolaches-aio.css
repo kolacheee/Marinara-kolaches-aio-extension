@@ -1318,7 +1318,9 @@
   transition: opacity 0.18s ease, transform 0.18s ease;
   z-index: 10;
   max-width: 18rem;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 .kaio-toast[data-visible="true"] {
   opacity: 1;
