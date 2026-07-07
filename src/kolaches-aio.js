@@ -3850,7 +3850,12 @@ function renderCharLorebookSection() {
   }));
   wrap.appendChild(pickWrap);
 
-  wrap.appendChild(renderCharBookSummary());
+  // Embedded-book summary: always show it when there IS an embedded book; when
+  // there isn't, only show the explanatory note if nothing is linked either —
+  // once a lorebook is linked, the "no embedded lorebook" note is just clutter.
+  const hasEmbedded = !!(state.inspecting && state.inspecting.character
+    && state.inspecting.character.data && state.inspecting.character.data.character_book);
+  if (hasEmbedded || !linked.length) wrap.appendChild(renderCharBookSummary());
   return wrap;
 }
 // Set a draft field and re-render the right panel — for add/remove/reorder in
@@ -3960,18 +3965,28 @@ function renderRpgStatsEditor(rs) {
   poolsHint.textContent = "HP/MP/…-style bars: name, current, max, and a #rrggbb color. A pool named \"HP\" also syncs the card's hp on save.";
   wrap.appendChild(poolsHint);
   rs.pools.forEach((p, i) => {
-    const row = document.createElement("div");
-    row.className = "kaio-array-row";
-    row.appendChild(inlineInput(p.name, "Name (HP…)", "text", (v) => { p.name = v; refreshDirtyFooter(); }));
-    row.appendChild(inlineInput(p.value, "0", "number", (v) => { p.value = v; refreshDirtyFooter(); }));
-    row.appendChild(inlineInput(p.max, "max", "number", (v) => { p.max = v; refreshDirtyFooter(); }, { min: 1 }));
+    // Two lines so the name field is readable in the narrow editor: name + remove
+    // on top, then current / max / color underneath (four fields won't fit on one).
+    const card = document.createElement("div");
+    card.className = "kaio-pool-row";
+    const line1 = document.createElement("div");
+    line1.className = "kaio-pool-line";
+    const nameIn = inlineInput(p.name, "Pool name (HP, MP…)", "text", (v) => { p.name = v; refreshDirtyFooter(); });
+    nameIn.classList.add("kaio-pool-name");
+    line1.appendChild(nameIn);
+    line1.appendChild(inlineRemoveBtn("Remove pool", () => { rs.pools.splice(i, 1); updateDraftAndRerender("rpgStats", rs); }));
+    card.appendChild(line1);
+    const line2 = document.createElement("div");
+    line2.className = "kaio-pool-line";
+    line2.appendChild(inlineInput(p.value, "current", "number", (v) => { p.value = v; refreshDirtyFooter(); }));
+    line2.appendChild(inlineInput(p.max, "max", "number", (v) => { p.max = v; refreshDirtyFooter(); }, { min: 1 }));
     // Plain text (not <input type=color>) so free-form CSS colors — rgba(),
     // named, gradients — round-trip instead of snapping to a 6-digit hex.
     const color = inlineInput(p.color, "#rrggbb", "text", (v) => { p.color = v; refreshDirtyFooter(); });
     color.classList.add("kaio-pool-color");
-    row.appendChild(color);
-    row.appendChild(inlineRemoveBtn("Remove pool", () => { rs.pools.splice(i, 1); updateDraftAndRerender("rpgStats", rs); }));
-    wrap.appendChild(row);
+    line2.appendChild(color);
+    card.appendChild(line2);
+    wrap.appendChild(card);
   });
   const addP = document.createElement("button");
   addP.type = "button"; addP.className = "kaio-create-btn"; addP.textContent = "+ Pool";
