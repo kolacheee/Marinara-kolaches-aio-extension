@@ -91,7 +91,7 @@ Every selected piece, rendered in the order the engine would build it: preset se
 
 ## Editor
 
-Click any block (or a folder) to edit its fields on the right. **Save / Revert / Delete** sit in the footer, scroll position is preserved across saves, and switching away while dirty prompts a Save / Revert / Stay confirmation. Failed saves surface the engine's actual error message.
+Click any block (or a folder) to edit its fields on the right. **Save / Revert / Delete** sit in the footer, scroll position is preserved across saves, and switching away while dirty prompts a Save / Revert / Stay confirmation. Failed saves surface the engine's actual error message. Edits write to Marinara immediately, but its own editors may keep showing the old copy until you refresh the page (**Ctrl+Shift+R**) — a `?` by the titlebar title notes this, since the extension writes straight to the API and can't invalidate Marinara's in-memory cache.
 
 - **Preset Editor** (✏️ on the preset) — three collapsibles: *Overview* (name, description, wrap format, author), *Sections* (group management + the section-order list with drag reorder and a `+ Section` type menu), and *Preset Variables* (name, question, options, multi-select, separator, random-pick).
 - **Lorebook Editor** (✏️ on a lorebook) — name, description, tags, category, scan depth, token budget, recursive, enabled, global.

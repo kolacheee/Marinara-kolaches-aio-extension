@@ -2,9 +2,9 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
-## [1.10.0] — 2026-07-07
+## [1.10.0] — 2026-07-08
 
-Group chat support: build a multi-character group and see how its character section assembles.
+Three big additions: **group chat** composition (build a multi-character group and see how its section assembles), **create-from-scratch** `+` buttons on every source, and a **full character-card editor** that can now **link *or embed*** lorebooks.
 
 ### Added
 
@@ -20,6 +20,11 @@ Group chat support: build a multi-character group and see how its character sect
 ### Changed
 
 - **Selection persistence** now stores the full character group (`characterIds`), the group settings, and the focused responder. Older saved selections with a single `characterId` still restore (as a one-member group).
+
+### Fixed
+
+- **First embed now shows the `EMBEDDED` badge right away.** The engine mirrors a linked lorebook into the card's `character_book` on a lorebook write, but the first write immediately after the forward pointer is set didn't reliably take — so a freshly-embedded book (and its badge) only appeared after a *second* embed. The editor now re-fires the sync when the baked-in copy doesn't land, so it (and the badge) show on the first embed.
+- **Long toasts wrap instead of overflowing.** Multi-line toast messages now wrap inside the toast box instead of spilling past its right edge.
 
 ## [1.9.0] — 2026-06-30
 
