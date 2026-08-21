@@ -349,9 +349,9 @@ function buildConsole() {
         <span class="kaio-subtitle">Prompt Viewer &amp; Editor</span>
         <span class="kaio-tip kaio-title-tip" data-tip="Edits save to Marinara immediately, but its own editors (character/preset/lorebook/persona) may keep showing the old version until you refresh the page — Ctrl+Shift+R.">?</span>
         <span class="kaio-spacer"></span>
-        <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍 Inspect</button>
-        <button class="kaio-iconbtn" data-action="summaries" title="Export every chat summary in your library — works with no chat open">📤 Summaries</button>
-        <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
+        <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍<span class="kaio-btn-text"> Inspect</span></button>
+        <button class="kaio-iconbtn" data-action="summaries" title="Export every chat summary in your library — works with no chat open">📤<span class="kaio-btn-text"> Summaries</span></button>
+        <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻<span class="kaio-btn-text"> Reload</span></button>
         <button class="kaio-iconbtn" data-action="settings" title="AIO settings">⚙️</button>
         <button class="kaio-iconbtn" data-action="close" title="Close (Esc)">✕</button>
       </div>
