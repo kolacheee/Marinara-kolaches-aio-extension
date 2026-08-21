@@ -32,7 +32,7 @@ Click the 🥞 to open a three-column overlay:
 | **Simulated Prompt** (middle) | Everything you picked, rendered in the **exact order** the engine assembles it. Click any block to edit it. |
 | **Editor** (right) | The fields for whatever block you clicked. Save / Revert / Delete — changes write back to the real source. |
 
-Two utilities live in the titlebar: **🔍 Inspect** (capture the real prompt) and **⚙️ Settings**.
+Three utilities live in the titlebar: **🔍 Inspect** (capture the real prompt), **📤 Summaries** (bulk-export every chat summary), and **⚙️ Settings**.
 
 ---
 
@@ -119,6 +119,17 @@ The **Inspect** button (titlebar, next to *Reload*) captures the prompt as it wo
 
 ---
 
+## 📤 Summaries
+
+The **Summaries** button (titlebar, next to *Inspect*) bulk-exports every chat summary in your library in a **single** request. It needs no chat open — it reads your stored chats directly, not the current selection.
+
+- **What it finds.** One row per chat with a summary: name, mode, how many entries (and how many are disabled), the compiled length, and a preview.
+- **Two formats, copy or download.** **Markdown** for reading, **JSON** for machines. The JSON keeps the raw `summaryEntries` next to the compiled text — Marinara compiles a chat's `summary` from its **enabled** entries only, so the entries are the authoritative copy. Disabled entries are exported and flagged, never silently dropped.
+- **All three chat modes**, which is more than the prompt ever sees. Marinara injects a chat summary into **roleplay** prompts only; conversation and game chats keep their own tracks (day/week summaries, session summaries). The exporter reads the stored chat rows, so it doesn't care about mode and picks up all of them.
+- Marinara's internal Professor Mari home chat is never returned by the API, so it can't appear here.
+
+---
+
 ## ⚙️ Settings
 
 The **⚙️** button (titlebar, between *Reload* and *Close*) opens settings, persisted in `localStorage`:
@@ -149,7 +160,8 @@ Built against **Marinara Engine 2.0.0 – 2.4.x**. Data access is plain REST aga
 - **Presets:** `GET /api/prompts/`, `POST /api/prompts/` (create), `GET /api/prompts/:id/full`, `PATCH /api/prompts/:id`, sections `POST`/`PATCH`/`DELETE` + `PUT …/sections/reorder`, groups `POST`/`PATCH`/`DELETE`, variables `POST`/`PATCH`/`DELETE`.
 - **Lorebooks:** `GET /api/lorebooks`, `POST /api/lorebooks` (create), `PATCH /api/lorebooks/:id`, entries `GET`/`POST`/`PATCH`/`DELETE`, folders `GET`/`POST`/`PATCH`/`DELETE` (folder `PATCH` carries `parentFolderId` for nesting).
 - **Characters & personas:** `GET`/`POST`/`PATCH` for `/api/characters[/:id]` and `/api/characters/personas/{list,:id}` (character create posts `{ data }`; persona create posts flat `{ name }`).
-- **Prompt Inspector & token gauge:** `POST /api/generate/dryRun` (`{ chatId, returnPrompt: true }`), `GET /api/chats/:id` + `GET /api/chats/:id/messages`, and `GET /api/connections` (to read the active connection's Max Context Window).
+- **Prompt Inspector & token gauge:** `POST /api/generate/dryRun` (`{ chatId, returnPrompt: true, injectChatSummary: true, injectLorebook: true, injectTrackers: true }` — the engine treats those three injections as explicit opt-ins on this endpoint even though real generation always applies them), `GET /api/chats/:id` + `GET /api/chats/:id/messages`, and `GET /api/connections` (to read the active connection's Max Context Window).
+- **Summary export:** `GET /api/chats` — one request; the list response carries each chat's full parsed `metadata`, including `summary`, `summaryEntries`, and the conversation/game summary tracks.
 
 **On 2.3.4+ this is a "Personal Extension" with full page access.** Marinara replaced its extension system with a sandboxed one: browser extensions normally run in a Worker inside an opaque-origin iframe with no DOM, no `localStorage`, and no same-origin network. A three-column overlay that edits your presets and cards can't live there, so this extension declares the `full_page_access` capability and runs in the page like before. The trade-off is real and worth stating plainly: it is *not* sandboxed, so install it only because you trust it — the source in `src/` is the code that runs, and `tools/build.mjs` is all that stands between the two. One consequence of the sandbox split: extensions in the safe runtime can register buttons on Marinara's own surfaces via `marinara.ui.registerContribution(...)`, but that API isn't handed to full-page extensions, so this one still injects its 🥞 buttons directly into the DOM.
 

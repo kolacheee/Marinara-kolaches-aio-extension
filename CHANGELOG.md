@@ -4,7 +4,12 @@ All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded h
 
 ## [1.10.1] — 2026-08-21
 
-Compatibility with Marinara Engine's locked-down **Personal Extensions** system (2.3.4+).
+Compatibility with Marinara Engine's locked-down **Personal Extensions** system (2.3.4+), plus a summary exporter and a real fix for what 🔍 Inspect was leaving out.
+
+### Added
+
+- **📤 Summaries — bulk-export every chat summary in your library.** A new titlebar button pulls every stored summary in a *single* request and shows what it found (per chat: name, mode, entry counts, a preview), then hands you the lot as **Markdown** or **JSON**, by copy or file download. It works with **no chat open** — it's a library-wide export, not tied to your current selection. Disabled summary entries are exported too, flagged rather than dropped, and the JSON keeps the raw `summaryEntries` alongside the compiled text (the engine compiles `summary` from *enabled* entries only, so the entries are the authoritative copy).
+  - **It covers all three chat modes**, which prompt injection does not. The engine only injects a chat summary into **roleplay** prompts, but conversation and game chats keep their own tracks — `daySummaries` / `weekSummaries` and session summaries — and the exporter reads all of them, because it reads the stored chat rows rather than the prompt.
 
 ### Fixed
 

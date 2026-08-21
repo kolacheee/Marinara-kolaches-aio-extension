@@ -350,6 +350,7 @@ function buildConsole() {
         <span class="kaio-tip kaio-title-tip" data-tip="Edits save to Marinara immediately, but its own editors (character/preset/lorebook/persona) may keep showing the old version until you refresh the page — Ctrl+Shift+R.">?</span>
         <span class="kaio-spacer"></span>
         <button class="kaio-iconbtn" data-action="inspect" title="Inspect the full prompt as it would be sent to the API">🔍 Inspect</button>
+        <button class="kaio-iconbtn" data-action="summaries" title="Export every chat summary in your library — works with no chat open">📤 Summaries</button>
         <button class="kaio-iconbtn" data-action="refresh" title="Reload sources">↻ Reload</button>
         <button class="kaio-iconbtn" data-action="settings" title="AIO settings">⚙️</button>
         <button class="kaio-iconbtn" data-action="close" title="Close (Esc)">✕</button>
@@ -439,6 +440,7 @@ function buildConsole() {
     showToast("Reloaded", "success");
   });
   overlayEl.querySelector('[data-action="inspect"]').addEventListener("click", () => openPromptInspector());
+  overlayEl.querySelector('[data-action="summaries"]').addEventListener("click", () => openSummaryExporter());
   overlayEl.querySelector('[data-action="settings"]').addEventListener("click", () => showSettings());
   overlayEl.querySelector('[data-action="validate"]').addEventListener(
     "click",
@@ -6131,6 +6133,235 @@ function getActiveChatId() {
   } catch {
     return null;
   }
+}
+
+// ── Chat summary exporter ───────────────────────────────────────
+// Bulk-extracts every stored chat summary in one GET /chats. This reads the
+// chat rows directly, so unlike Inspect it is *not* mode-gated: the engine only
+// injects metadata.summary into roleplay prompts (roleplay-summary-retrieval
+// returns null for other modes), but conversation and game chats still keep
+// their own tracks — daySummaries / weekSummaries and gamePreviousSessionSummaries
+// — and those come back on the very same response.
+
+// Stored summary values are loosely typed across the three tracks: a bare
+// string, a { summary, keyDetails } day/week entry, or a game SessionSummary.
+function summaryEntryText(v) {
+  if (typeof v === "string") return v.trim();
+  if (!v || typeof v !== "object") return "";
+  const parts = [v.title, v.summary, v.text, v.resumePoint];
+  const joined = parts.filter((p) => typeof p === "string" && p.trim()).join("\n").trim();
+  if (joined) return joined;
+  // Last resort: keep the data rather than rendering "[object Object]".
+  try { return JSON.stringify(v); } catch { return ""; }
+}
+
+function summaryTrackList(v) {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object") {
+    // day/week summaries are keyed maps; sort so exports are stable.
+    return Object.keys(v).sort().map((k) => ({ key: k, value: v[k] }));
+  }
+  return [];
+}
+
+// Pull every summary track off one chat row. Returns null when the chat has none.
+function readChatSummaryTracks(chat) {
+  const meta = tryParseJSON(chat && chat.metadata, {}) || {};
+  const rolling = typeof meta.summary === "string" ? meta.summary.trim() : "";
+  const entries = Array.isArray(meta.summaryEntries) ? meta.summaryEntries : [];
+  const day = summaryTrackList(meta.daySummaries);
+  const week = summaryTrackList(meta.weekSummaries);
+  const session = summaryTrackList(meta.gamePreviousSessionSummaries);
+  if (!rolling && !entries.length && !day.length && !week.length && !session.length) return null;
+  return {
+    id: chat.id,
+    name: (chat.name || "").trim() || "(unnamed chat)",
+    mode: chat.mode || "roleplay",
+    updatedAt: chat.updatedAt || null,
+    rolling,
+    entries,
+    // A legacy entry with no `enabled` field counts as enabled, matching the
+    // engine's own normalizer.
+    enabledCount: entries.filter((e) => e && e.enabled !== false).length,
+    day, week, session,
+  };
+}
+
+async function openSummaryExporter() {
+  let chats;
+  try {
+    chats = await api("GET", "/chats/");
+  } catch (e) {
+    showToast("Couldn't load chats — " + (e && e.message ? e.message : "see console"), "error");
+    return;
+  }
+  const list = Array.isArray(chats) ? chats : [];
+  const rows = list.map(readChatSummaryTracks).filter(Boolean);
+  showSummaryExportModal(rows, list.length);
+}
+
+function buildSummaryExportMarkdown(rows) {
+  const out = ["# Chat summaries", "", "Exported from kolache's AIO.", ""];
+  for (const r of rows) {
+    out.push("## " + r.name, "", "- Chat ID: `" + r.id + "`", "- Mode: " + r.mode);
+    if (r.updatedAt) out.push("- Updated: " + r.updatedAt);
+    out.push("");
+    if (r.rolling) out.push("### Rolling summary", "", r.rolling, "");
+    if (r.entries.length) {
+      out.push("### Entries (" + r.enabledCount + " enabled of " + r.entries.length + ")", "");
+      r.entries.forEach((e, i) => {
+        const text = summaryEntryText(e && (e.text !== undefined ? e.text : e));
+        out.push("#### Entry " + (i + 1) + (e && e.enabled === false ? " — DISABLED" : ""), "", text, "");
+      });
+    }
+    for (const [label, track] of [["Day summaries", r.day], ["Week summaries", r.week], ["Session summaries", r.session]]) {
+      if (!track.length) continue;
+      out.push("### " + label + " (" + track.length + ")", "");
+      track.forEach((item, i) => {
+        const keyed = item && item.key !== undefined;
+        out.push("#### " + (keyed ? item.key : "Session " + (i + 1)), "", summaryEntryText(keyed ? item.value : item), "");
+      });
+    }
+  }
+  return out.join("\n");
+}
+
+function buildSummaryExportJSON(rows, scanned) {
+  return JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    chatsScanned: scanned,
+    chatsWithSummaries: rows.length,
+    // `summary` is the engine's compiled text of ENABLED entries only, so the
+    // raw entries are kept alongside it rather than derived from it.
+    note: "summary is compiled from enabled entries only; summaryEntries is authoritative.",
+    chats: rows.map((r) => ({
+      id: r.id, name: r.name, mode: r.mode, updatedAt: r.updatedAt,
+      summary: r.rolling || null,
+      summaryEntries: r.entries,
+      daySummaries: r.day, weekSummaries: r.week, sessionSummaries: r.session,
+    })),
+  }, null, 2);
+}
+
+// The console runs in the page, so a Blob download works; clipboard is the
+// fallback when the browser blocks it (or the payload is too big to copy).
+function downloadTextFile(name, text, mime) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime || "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch { return false; }
+}
+
+async function copySummaryExport(text, fallbackName, mime) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Copied " + text.length.toLocaleString() + " characters", "success");
+  } catch {
+    if (downloadTextFile(fallbackName, text, mime)) showToast("Too big to copy — downloaded instead", "info");
+    else showToast("Copy failed — clipboard blocked", "error");
+  }
+}
+
+function showSummaryExportModal(rows, scanned) {
+  const shell = overlayEl && overlayEl.querySelector(".kaio-shell");
+  if (!shell) return;
+  const prev = shell.querySelector(".kaio-pi-bg");
+  if (prev) { if (typeof prev._kaioClose === "function") prev._kaioClose(); else prev.remove(); }
+
+  const bg = document.createElement("div");
+  bg.className = "kaio-pi-bg";
+  bg.innerHTML = `
+    <div class="kaio-pi-modal" role="dialog" aria-label="Chat summary export">
+      <div class="kaio-pi-head">
+        <span class="kaio-pi-title">📤 Chat summaries</span>
+        <span class="kaio-pi-badge"></span>
+        <span class="kaio-spacer"></span>
+        <div class="kaio-pi-actions">
+          <button class="kaio-btn" data-sx="md" title="Copy every summary as readable Markdown">Copy Markdown</button>
+          <button class="kaio-btn" data-sx="json" title="Copy as structured JSON, including disabled entries">Copy JSON</button>
+          <button class="kaio-btn kaio-btn-ghost" data-sx="dl-md" title="Download as a .md file">⬇ .md</button>
+          <button class="kaio-btn kaio-btn-ghost" data-sx="dl-json" title="Download as a .json file">⬇ .json</button>
+        </div>
+        <button class="kaio-iconbtn" data-pi="close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="kaio-pi-body"></div>
+    </div>`;
+  shell.appendChild(bg);
+
+  const body = bg.querySelector(".kaio-pi-body");
+  const totalEntries = rows.reduce((n, r) => n + r.entries.length + r.day.length + r.week.length + r.session.length, 0);
+  const totalChars = rows.reduce((n, r) => n + r.rolling.length, 0);
+  bg.querySelector(".kaio-pi-badge").textContent =
+    rows.length + " of " + scanned + " chats · " + totalEntries + " entries · " + totalChars.toLocaleString() + " chars";
+
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "kaio-pi-empty";
+    empty.textContent = scanned
+      ? "None of your " + scanned + " chats have a stored summary yet. (Marinara's own internal assistant chat is never returned by this endpoint.)"
+      : "The engine returned no chats.";
+    body.appendChild(empty);
+  }
+
+  // User data goes in as textContent throughout — summaries are free text.
+  for (const r of rows) {
+    const card = document.createElement("div");
+    card.className = "kaio-pi-msg";
+
+    const head = document.createElement("div");
+    head.className = "kaio-pi-msg-role";
+    head.textContent = r.name + "  ·  " + r.mode;
+    card.appendChild(head);
+
+    const bits = [];
+    if (r.rolling) bits.push(r.rolling.length.toLocaleString() + " chars");
+    if (r.entries.length) bits.push(r.entries.length + " entries (" + r.enabledCount + " enabled)");
+    if (r.day.length) bits.push(r.day.length + " day");
+    if (r.week.length) bits.push(r.week.length + " week");
+    if (r.session.length) bits.push(r.session.length + " session");
+    const meta = document.createElement("div");
+    meta.className = "kaio-group-note";
+    meta.textContent = bits.join(" · ");
+    card.appendChild(meta);
+
+    const preview = document.createElement("div");
+    preview.className = "kaio-pi-pre";
+    const first = r.rolling || summaryEntryText(
+      (r.entries[0] && (r.entries[0].text !== undefined ? r.entries[0].text : r.entries[0]))
+      || (r.day[0] && r.day[0].value) || (r.week[0] && r.week[0].value) || r.session[0] || "",
+    );
+    preview.textContent = first.length > 240 ? first.slice(0, 240) + "…" : first;
+    card.appendChild(preview);
+
+    body.appendChild(card);
+  }
+
+  const md = () => buildSummaryExportMarkdown(rows);
+  const js = () => buildSummaryExportJSON(rows, scanned);
+  bg.querySelector('[data-sx="md"]').addEventListener("click", () => copySummaryExport(md(), "chat-summaries.md", "text/markdown"));
+  bg.querySelector('[data-sx="json"]').addEventListener("click", () => copySummaryExport(js(), "chat-summaries.json", "application/json"));
+  bg.querySelector('[data-sx="dl-md"]').addEventListener("click", () => {
+    if (!downloadTextFile("chat-summaries.md", md(), "text/markdown")) showToast("Download blocked by the browser", "error");
+  });
+  bg.querySelector('[data-sx="dl-json"]').addEventListener("click", () => {
+    if (!downloadTextFile("chat-summaries.json", js(), "application/json")) showToast("Download blocked by the browser", "error");
+  });
+
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    bg.remove();
+  }
+  function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); close(); } }
+  bg._kaioClose = close; // let closeConsoleNow tear this down cleanly
+  document.addEventListener("keydown", onKey, true);
+  bg.querySelector('[data-pi="close"]').addEventListener("click", close);
+  bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
 }
 
 // ── AIO settings (persisted in localStorage) ────────────────────
