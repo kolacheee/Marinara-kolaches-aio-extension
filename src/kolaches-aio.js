@@ -1060,7 +1060,7 @@ function renderCharacterSources() {
     note.className = "kaio-group-note";
     note.innerHTML =
       "A chat is active — group composition &amp; settings come from the live chat. " +
-      "Use <strong>🔍 Inspect</strong> for the exact prompt.";
+      "Use <strong>🔍 Inspect</strong> for the resolved prompt.";
     wrap.appendChild(note);
     return wrap;
   }
@@ -6419,11 +6419,26 @@ async function fetchChatMessages(chatId) {
   }
 }
 
-// Capture the exact prompt the engine would send for a chat, via the dry-run
-// preview endpoint. Returns { messages, meta }. CSRF is added by Marinara's
-// global fetch shim (same path as every other api() call).
+// Capture the prompt the engine would send for a chat, via the dry-run preview
+// endpoint. Returns { messages, meta }. CSRF is added by Marinara's global fetch
+// shim (same path as every other api() call).
+//
+// The chat summary, lorebook entries and tracker metadata are *explicit opt-ins*
+// on this endpoint ("Optional prompt injections are explicit opt-ins", per the
+// engine's own route docs) even though real generation always includes them —
+// omit the flags and the capture silently drops all three.
+//
+// Even with them, a dry run is not byte-identical to a live send: it runs no
+// agents or tools, and passes no chat embedding, so semantically-recalled
+// lorebook entries can still differ.
 async function dryRunPrompt(chatId) {
-  const data = await api("POST", "/generate/dryRun", { chatId, returnPrompt: true });
+  const data = await api("POST", "/generate/dryRun", {
+    chatId,
+    returnPrompt: true,
+    injectChatSummary: true,
+    injectLorebook: true,
+    injectTrackers: true,
+  });
   const msgs = (data && data.prompt && data.prompt.messages) || [];
   const p = (data && data.parameters) || {};
   return {
@@ -6531,7 +6546,7 @@ async function openPromptInspector() {
                 + "the messages aren't merged/ordered exactly as the provider would receive them, and the history isn't "
                 + "trimmed to a model's context window. Showing "
                 + (limited ? ("the most recent " + limit + " of " + all.length + " chat turns") : "the raw chat history")
-                + " (cap in ⚙ Settings). Add a connection and choose Include for the exact, resolved prompt — and Copy JSON for the real messages array.",
+                + " (cap in ⚙ Settings). Add a connection and choose Include for the engine's resolved prompt — and Copy JSON for the real messages array.",
             };
           } else {
             console.error("[kolache-AIO] dryRun failed", e);
