@@ -2,6 +2,20 @@
 
 All notable changes to **kolache's AIO Prompt Viewer and Editor** are recorded here.
 
+## [1.10.1] — 2026-08-21
+
+Compatibility with Marinara Engine's locked-down **Personal Extensions** system (2.3.4+).
+
+### Fixed
+
+- **The extension no longer dies on load.** Marinara removed the `marinara.observe(...)` helper when it retired the old extension system in **2.3.4**, so the bootstrap threw `TypeError` on every load. Everything after that line was skipped: the re-injection retry loop *and* the cleanup registration. The console still opened (its button was injected before the throw), but nothing recovered from a re-render and nothing was ever torn down. The extension now runs its own `MutationObserver` (coalesced to one pass per frame) and feature-detects `onCleanup`, so a future reshape of the host API degrades instead of throwing.
+- **The 🥞 is back on the extension's card in Settings → Extensions.** Its two anchors had been deleted along with the old extension system — the card is now rendered by `PersonalExtensionsSettings.tsx`, whose name span is `truncate text-xs font-semibold` (not `truncate font-medium`) and whose delete button carries a localized title (not `title="Remove extension"`). The button now anchors on the card's control column (`role="group"` + the extension's own name), which survives Tailwind churn and localization, and it prefers an exact name match so a second `kolache`-ish extension can't claim it. The pre-2.4 markup is still tried as a fallback, so the card button keeps working on engines **2.0.0–2.3.3**.
+- **Teardown actually runs now, and stays torn down.** Disabling, removing, or updating the extension removes both buttons, closes the overlay, drops the tooltip layer, and disconnects the observer. A frame already queued when cleanup fires is cancelled and latched, so it can't resurrect the buttons a moment later (which would otherwise leave a working console attached to an uninstalled extension, and pin you to the old build across an update).
+
+### Changed
+
+- **The shipped manifest now declares `capabilities: ["full_page_access"]`** and a `version`. The console is a full-page DOM overlay over the same-origin REST API, and the importer defaults an undeclared extension to *no* capabilities — which runs the code in a DOM-less Worker where nothing works. On import Marinara asks you to acknowledge full-page access; that prompt is expected.
+
 ## [1.10.0] — 2026-07-08
 
 Three big additions: **group chat** composition (build a multi-character group and see how its section assembles), **create-from-scratch** `+` buttons on every source, and a **full character-card editor** that can now **link *or embed*** lorebooks.

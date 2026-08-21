@@ -13,7 +13,8 @@ It exists to kill the back-and-forth: instead of bouncing between five separate 
 1. Grab **`kolaches-aio.json`** from the [Releases page](../../releases) (or this repo's root).
 2. In Marinara, open the gear menu (top-right) → **Extensions** → **Import Extension File (.zip, .json, .css, or .js)**.
 3. Select `kolaches-aio.json`. It installs **enabled** by default.
-4. Refresh the page once. A 🥞 button appears at the left end of the top-right tab strip.
+4. On **Marinara 2.3.4+** you'll be asked to review the code and acknowledge **full page access**. That's expected — the console is a full-page overlay that reads and writes through the same-origin `/api`, which the sandboxed extension runtime can't reach. The manifest declares `capabilities: ["full_page_access"]` so the prompt appears up front instead of the extension silently loading into a DOM-less sandbox.
+5. Refresh the page once. A 🥞 button appears at the left end of the top-right tab strip.
 
 On phones/tablets (where toolbar space is tight) the toolbar 🥞 is hidden — open the console from the extension's card in **Settings → Extensions** instead.
 
@@ -143,12 +144,14 @@ On screens ≤ 768px the three columns collapse into a single full-screen panel 
 
 ## Compatibility
 
-Built against **Marinara Engine 2.0.0+**. Data access is plain REST against the same-origin `/api` server, so it also runs on the legacy Node.js/Fastify build (v1.5.9+). Endpoints used:
+Built against **Marinara Engine 2.0.0 – 2.4.x**. Data access is plain REST against the same-origin `/api` server, so it also runs on the legacy Node.js/Fastify build (v1.5.9+). Endpoints used:
 
 - **Presets:** `GET /api/prompts/`, `POST /api/prompts/` (create), `GET /api/prompts/:id/full`, `PATCH /api/prompts/:id`, sections `POST`/`PATCH`/`DELETE` + `PUT …/sections/reorder`, groups `POST`/`PATCH`/`DELETE`, variables `POST`/`PATCH`/`DELETE`.
 - **Lorebooks:** `GET /api/lorebooks`, `POST /api/lorebooks` (create), `PATCH /api/lorebooks/:id`, entries `GET`/`POST`/`PATCH`/`DELETE`, folders `GET`/`POST`/`PATCH`/`DELETE` (folder `PATCH` carries `parentFolderId` for nesting).
 - **Characters & personas:** `GET`/`POST`/`PATCH` for `/api/characters[/:id]` and `/api/characters/personas/{list,:id}` (character create posts `{ data }`; persona create posts flat `{ name }`).
 - **Prompt Inspector & token gauge:** `POST /api/generate/dryRun` (`{ chatId, returnPrompt: true }`), `GET /api/chats/:id` + `GET /api/chats/:id/messages`, and `GET /api/connections` (to read the active connection's Max Context Window).
+
+**On 2.3.4+ this is a "Personal Extension" with full page access.** Marinara replaced its extension system with a sandboxed one: browser extensions normally run in a Worker inside an opaque-origin iframe with no DOM, no `localStorage`, and no same-origin network. A three-column overlay that edits your presets and cards can't live there, so this extension declares the `full_page_access` capability and runs in the page like before. The trade-off is real and worth stating plainly: it is *not* sandboxed, so install it only because you trust it — the source in `src/` is the code that runs, and `tools/build.mjs` is all that stands between the two. One consequence of the sandbox split: extensions in the safe runtime can register buttons on Marinara's own surfaces via `marinara.ui.registerContribution(...)`, but that API isn't handed to full-page extensions, so this one still injects its 🥞 buttons directly into the DOM.
 
 Marinara 2.0.0 returns some booleans (e.g. a prompt section's `enabled`) as the strings `"true"`/`"false"`; the extension normalizes those on load. If a future release reshapes an endpoint, the extension surfaces it as a "Couldn't load …" / "Save failed …" toast — file an issue and I'll patch.
 
@@ -171,7 +174,7 @@ After editing anything under `src/`, rebuild:
 node tools/build.mjs
 ```
 
-Marinara runs the JS inside a function that receives a `marinara` helper API (`observe`, `onCleanup`, `addStyle`, `addElement`, `apiFetch`, …). This extension uses only `observe`/`onCleanup` and reaches data through plain same-origin `fetch('/api/...')` — Marinara's global fetch shim adds the CSRF header to mutating requests automatically. (We avoid `marinara.apiFetch` because it always parses JSON, which throws on the `204 No Content` replies our delete/reorder calls rely on.)
+Marinara runs the JS inside a function that receives a `marinara` helper API. On **2.3.4+** a full-page extension gets `version`, `extension`, `log`, `storage`, `fetch`, the timer helpers, and `onCleanup` — the older `observe` / `addStyle` / `addElement` / `apiFetch` helpers were removed with the old extension system. This extension therefore runs **its own `MutationObserver`** (one coalesced pass per frame) and feature-detects `onCleanup`, so it still loads if the host API changes shape again. Data comes through plain same-origin `fetch('/api/...')` — Marinara's global fetch shim adds the CSRF header to mutating requests automatically. (We avoid `marinara.apiFetch` because it always parses JSON, which throws on the `204 No Content` replies our delete/reorder calls rely on.)
 
 ---
 

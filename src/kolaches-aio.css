@@ -70,6 +70,7 @@
   transition: transform 0.15s;
   filter: saturate(1.1);
   flex-shrink: 0;
+  align-self: center;
 }
 .kaio-ext-launcher:hover { transform: scale(1.15); }
 

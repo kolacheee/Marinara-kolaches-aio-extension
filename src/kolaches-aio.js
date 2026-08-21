@@ -10,7 +10,9 @@
  * ─────────────────────────────────────────────*/
 
 // `marinara` is supplied by the engine when the extension JS runs.
-// Available helpers we use: marinara.observe, marinara.onCleanup.
+// Helpers we use: marinara.onCleanup, feature-detected. marinara.observe was
+// removed with the engine's old extension system (2.3.4) — we run our own
+// MutationObserver instead.
 
 // ── API layer ──────────────────────────────────────────────────
 // Marinara Engine 2.0.0 serves a same-origin REST API under /api and installs
@@ -285,26 +287,51 @@ function matchTopbarButtonShape(btn, nav) {
 }
 
 // ── Extension-card 🥞 button (injected into Settings → Extensions) ──
+// Anchored on the card's control column, which carries role="group" plus an
+// aria-label of the extension's own name — stable across the engine's Tailwind
+// churn and localization, unlike the old class/title selectors it replaces.
 function tryInjectExtensionLauncher() {
   if (document.querySelector(".kaio-ext-launcher")) return;
-  const nameSpans = document.querySelectorAll(".truncate.font-medium");
-  for (const span of nameSpans) {
-    if (!span.textContent || !span.textContent.includes("kolache")) continue;
-    if (span.closest(".kaio-overlay")) continue;
-    const card = span.closest(".rounded-lg");
-    if (!card) continue;
+
+  // 2.4+ card: a control column carrying role="group" + the extension's name.
+  // Exact name wins, so a second "kolache"-ish extension can't steal the button.
+  const groups = Array.prototype.slice
+    .call(document.querySelectorAll('[role="group"][aria-label]'))
+    .filter((g) => !g.closest(".kaio-overlay"));
+  const anchor =
+    groups.find((g) => g.getAttribute("aria-label") === KAIO_EXT_NAME) ||
+    groups.find((g) => (g.getAttribute("aria-label") || "").includes("kolache"));
+  let card = anchor ? anchor.closest(".rounded-lg") : null;
+
+  // Pre-2.4 card markup, so the button still lands on older engines.
+  let legacyBefore = null;
+  if (!card) {
+    for (const span of document.querySelectorAll(".truncate.font-medium")) {
+      if (!span.textContent || !span.textContent.includes("kolache")) continue;
+      if (span.closest(".kaio-overlay")) continue;
+      const legacyCard = span.closest(".rounded-lg");
+      if (!legacyCard) continue;
+      card = legacyCard;
+      legacyBefore = legacyCard.querySelector('[title="Remove extension"]');
+      break;
+    }
+  }
+  if (!card) return;
+
+  {
     const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = "kaio-ext-launcher";
     btn.title = "Open kolache's AIO Console";
-    btn.innerHTML = "🥞";
+    btn.setAttribute("aria-label", "Open kolache's AIO Console");
+    btn.textContent = "🥞";
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
+      ev.preventDefault();
       openConsole();
     });
-    const trashBtn = card.querySelector('[title="Remove extension"]');
-    if (trashBtn) card.insertBefore(btn, trashBtn);
+    if (legacyBefore) card.insertBefore(btn, legacyBefore);
     else card.appendChild(btn);
-    return;
   }
 }
 
@@ -6744,12 +6771,57 @@ function showPromptInspectorModal(messages, meta) {
   bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
 }
 
-console.log("[kolache-AIO] v1.10.0 loaded — Marinara Engine 2.0.0 (REST /api)");
-injectTopbarButton();
-tryInjectExtensionLauncher();
-marinara.observe(document.body, () => { injectTopbarButton(); tryInjectExtensionLauncher(); });
-marinara.onCleanup(() => {
+console.log("[kolache-AIO] v1.10.1 loaded — Marinara Engine 2.x (REST /api)");
+
+// The engine dropped marinara.observe when it retired the old extension system
+// (2.3.4), so we own the MutationObserver now. onCleanup survived, but it is
+// feature-detected so a future reshape degrades instead of throwing.
+const KAIO_HOST = typeof marinara === "undefined" ? null : marinara;
+const KAIO_EXT_NAME =
+  (KAIO_HOST && KAIO_HOST.extension && KAIO_HOST.extension.name) ||
+  "kolache's AIO Prompt Viewer and Editor";
+
+function kaioOnCleanup(fn) {
+  if (KAIO_HOST && typeof KAIO_HOST.onCleanup === "function") KAIO_HOST.onCleanup(fn);
+  else window.addEventListener("beforeunload", fn, { once: true });
+}
+
+// Coalesce injection to one pass per frame: React re-renders fire the observer
+// in bursts, and both injectors are cheap no-ops once their button exists.
+let kaioInjectQueued = false;
+let kaioRafId = 0;
+let kaioTornDown = false;
+function kaioInjectNow() {
+  kaioInjectQueued = false;
+  kaioRafId = 0;
+  if (kaioTornDown) return;
+  injectTopbarButton();
+  tryInjectExtensionLauncher();
+}
+function kaioScheduleInject() {
+  if (kaioInjectQueued || kaioTornDown) return;
+  kaioInjectQueued = true;
+  kaioRafId = requestAnimationFrame(kaioInjectNow);
+}
+
+const kaioObserver =
+  typeof MutationObserver === "function" ? new MutationObserver(kaioScheduleInject) : null;
+
+// Register teardown before anything that can throw, so a later failure can't
+// strand the overlay and its listeners on the page.
+kaioOnCleanup(() => {
+  // Latch first: disconnect() only drops undelivered records, so a frame armed
+  // earlier this tick would otherwise re-inject the buttons we remove below.
+  kaioTornDown = true;
+  if (kaioRafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(kaioRafId);
+  kaioRafId = 0;
+  if (kaioObserver) kaioObserver.disconnect();
+  hideTip();
   if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+  overlayEl = null;
   document.removeEventListener("keydown", onKeydown);
   document.querySelectorAll(".kaio-tab-btn, .kaio-ext-launcher").forEach((b) => b.remove());
 });
+
+kaioInjectNow();
+if (kaioObserver) kaioObserver.observe(document.body, { childList: true, subtree: true });

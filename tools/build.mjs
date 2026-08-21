@@ -25,6 +25,11 @@ try {
 
 const manifest = {
   name: "kolache's AIO Prompt Viewer and Editor",
+  version: "1.10.1",
+  // The console is a full-page DOM overlay over the same-origin REST API, so it
+  // needs full_page_access (engine 2.3.4+). Without an explicit capabilities
+  // list the importer defaults to [] and the code runs in a DOM-less Worker.
+  capabilities: ["full_page_access"],
   description:
     "All-in-one console for viewing and editing presets, lorebook entries, " +
     "characters, and personas in the order they would assemble.",
